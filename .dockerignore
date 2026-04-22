@@ -1,0 +1,17 @@
+**/.git
+**/.github
+**/node_modules
+**/dist
+**/build
+**/.env
+**/.env.local
+**/.env.*.local
+**/coverage
+**/*.log
+backend/data
+frontend/.vite
+frontend/dist
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

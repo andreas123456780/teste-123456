@@ -27,11 +27,12 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     zipCode: "",
   });
   const [loading, setLoading] = useState(false);
-  const [order, setOrder] = useState<{ id: string; total: number } | null>(null);
+  const [order, setOrder] = useState<{ id: string; total: number; token: string } | null>(null);
   const [payment, setPayment] = useState<
     | {
         clientSecret: string;
         orderId: string;
+        orderToken: string;
         amountCents: number;
         method: "pix" | "card";
       }
@@ -90,6 +91,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
       setPayment({
         clientSecret: intent.clientSecret,
         orderId: checkoutRes.orderId,
+        orderToken: checkoutRes.orderToken,
         amountCents: checkoutRes.amountCents,
         method,
       });
@@ -106,7 +108,11 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
 
   const handlePaid = () => {
     if (!payment) return;
-    setOrder({ id: payment.orderId, total: payment.amountCents });
+    setOrder({
+      id: payment.orderId,
+      total: payment.amountCents,
+      token: payment.orderToken,
+    });
     setPayment(null);
     setShipping(null);
     onClear();
@@ -198,13 +204,21 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                       {formatBRL(order.total)}
                     </span>
                   </p>
+                  {order.token && (
+                    <a
+                      href={`/pedido/${order.token}`}
+                      className="mt-8 border border-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-black"
+                    >
+                      Acompanhar pedido
+                    </a>
+                  )}
                   <motion.button
                     whileHover={{ y: -1 }}
                     onClick={() => {
                       setOrder(null);
                       onClose();
                     }}
-                    className="mt-8 border border-white/20 px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-white hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                    className="mt-4 border border-white/20 px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-white hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
                   >
                     Continuar comprando
                   </motion.button>

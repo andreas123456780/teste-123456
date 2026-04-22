@@ -32,7 +32,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -152,87 +151,6 @@ func (c *stripeClient) CreatePaymentIntent(ctx context.Context, amountCents int,
 	return &pi, nil
 }
 
-// ----- Order store (in-memory) -----
-//
-// This is an MVP store: pending orders live only in RAM and are evicted on
-// restart. That's fine for sandbox testing but should be replaced with a
-// real database before going live.
-
-type pendingOrder struct {
-	ID              string
-	TotalCents      int
-	PaymentMethod   string
-	PaymentIntentID string
-	Status          string // "pending_payment" | "paid" | "failed"
-	CreatedAt       time.Time
-	Email           string
-	ShippingCents   int
-	ShippingSvcID   int
-	ShippingSvcName string
-}
-
-type orderStore struct {
-	mu     sync.RWMutex
-	byID   map[string]*pendingOrder
-	byPI   map[string]string // payment_intent id → order id
-	maxAge time.Duration
-}
-
-func newOrderStore() *orderStore {
-	s := &orderStore{
-		byID:   make(map[string]*pendingOrder),
-		byPI:   make(map[string]string),
-		maxAge: 24 * time.Hour,
-	}
-	go s.gc()
-	return s
-}
-
-func (s *orderStore) gc() {
-	t := time.NewTicker(15 * time.Minute)
-	defer t.Stop()
-	for range t.C {
-		s.mu.Lock()
-		now := time.Now()
-		for id, o := range s.byID {
-			if now.Sub(o.CreatedAt) > s.maxAge {
-				delete(s.byID, id)
-				if o.PaymentIntentID != "" {
-					delete(s.byPI, o.PaymentIntentID)
-				}
-			}
-		}
-		s.mu.Unlock()
-	}
-}
-
-func (s *orderStore) put(o *pendingOrder) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.byID[o.ID] = o
-	if o.PaymentIntentID != "" {
-		s.byPI[o.PaymentIntentID] = o.ID
-	}
-}
-
-func (s *orderStore) get(id string) (*pendingOrder, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	o, ok := s.byID[id]
-	return o, ok
-}
-
-func (s *orderStore) byPaymentIntent(piID string) (*pendingOrder, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, ok := s.byPI[piID]
-	if !ok {
-		return nil, false
-	}
-	o, ok := s.byID[id]
-	return o, ok
-}
-
 // ----- Public HTTP handlers -----
 
 type paymentIntentRequest struct {
@@ -276,7 +194,14 @@ func handlePaymentsIntent(stripe *stripeClient, orders *orderStore) http.Handler
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid orderId"})
 			return
 		}
-		o, ok := orders.get(id)
+		ctx, cancel := context.WithTimeout(r.Context(), stripeHTTPTimeout)
+		defer cancel()
+		o, ok, err := orders.get(ctx, id)
+		if err != nil {
+			log.Printf("payments.intent store error: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
 		if !ok {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
 			return
@@ -285,22 +210,20 @@ func handlePaymentsIntent(stripe *stripeClient, orders *orderStore) http.Handler
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "order already paid"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), stripeHTTPTimeout)
-		defer cancel()
-		pi, err := stripe.CreatePaymentIntent(ctx, o.TotalCents+o.ShippingCents, o.PaymentMethod, o.ID, o.Email)
+		pi, err := stripe.CreatePaymentIntent(ctx, o.AmountCents, o.PaymentMethod, o.ID, o.Email)
 		if err != nil {
 			log.Printf("payments.intent error: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment provider failed"})
 			return
 		}
-		// Persist the PaymentIntent id so the webhook can resolve it back.
-		o.PaymentIntentID = pi.ID
-		orders.put(o)
+		if err := orders.setPaymentIntent(ctx, o.ID, pi.ID); err != nil {
+			log.Printf("payments.intent setPI error: %v", err)
+		}
 		writeJSON(w, http.StatusOK, paymentIntentResponse{
 			ClientSecret: pi.ClientSecret,
 			OrderID:      o.ID,
 			Status:       o.Status,
-			AmountCents:  o.TotalCents + o.ShippingCents,
+			AmountCents:  o.AmountCents,
 			Method:       o.PaymentMethod,
 		})
 	}
@@ -376,11 +299,36 @@ func verifyStripeSignature(secret string, header string, payload []byte, now tim
 	return errors.New("no matching signature")
 }
 
+// webhookDeps is the subset of dependencies the webhook needs. It's an
+// interface so tests can pass a fake label-generator without spinning up
+// a SuperFrete mock server.
+type webhookDeps struct {
+	Orders    *orderStore
+	LabelJob  labelEnqueuer // may be nil in tests
+	EmailJob  emailEnqueuer // may be nil (no Resend configured)
+	AppURL    string        // public origin, used to build order-lookup links
+	TokenKey  []byte        // HMAC key for order tokens
+}
+
+// labelEnqueuer is implemented by anything that can (asynchronously)
+// acquire a SuperFrete label for an order once it's been paid. Returning
+// quickly is critical — Stripe webhook deliveries have a 15s budget.
+type labelEnqueuer interface {
+	Enqueue(orderID string)
+}
+
+// emailEnqueuer is implemented by anything that can (asynchronously) send
+// the order-confirmation email. Same latency concern as labels.
+type emailEnqueuer interface {
+	Enqueue(orderID string)
+}
+
 // handlePaymentsWebhook validates the Stripe signature and, for
 // payment_intent events we care about, updates the corresponding order
-// status. Always responds 200 after a verified delivery so Stripe does
-// not retry — unless the signature itself failed.
-func handlePaymentsWebhook(cfg paymentsConfig, orders *orderStore) http.HandlerFunc {
+// status. Successful payment transitions trigger async SuperFrete label
+// generation + confirmation email. Always responds 200 after a verified
+// delivery so Stripe does not retry — unless the signature itself failed.
+func handlePaymentsWebhook(cfg paymentsConfig, deps webhookDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -402,11 +350,20 @@ func handlePaymentsWebhook(cfg paymentsConfig, orders *orderStore) http.HandlerF
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
 		switch ev.Type {
 		case "payment_intent.succeeded":
-			applyOrderStatus(orders, ev, "paid")
+			if orderID := applyOrderStatus(ctx, deps.Orders, ev, "paid"); orderID != "" {
+				if deps.LabelJob != nil {
+					deps.LabelJob.Enqueue(orderID)
+				}
+				if deps.EmailJob != nil {
+					deps.EmailJob.Enqueue(orderID)
+				}
+			}
 		case "payment_intent.payment_failed", "payment_intent.canceled":
-			applyOrderStatus(orders, ev, "failed")
+			applyOrderStatus(ctx, deps.Orders, ev, "failed")
 		default:
 			// Ignore other events; still ack to stop retries.
 		}
@@ -415,26 +372,56 @@ func handlePaymentsWebhook(cfg paymentsConfig, orders *orderStore) http.HandlerF
 }
 
 // applyOrderStatus looks up the order either by metadata.orderId or by the
-// payment_intent id and updates its status. No-op if the order isn't
-// known — most commonly because the in-memory store was restarted.
-func applyOrderStatus(orders *orderStore, ev stripeEvent, status string) {
+// payment_intent id and updates its status. Returns the order ID that was
+// updated so callers can enqueue follow-up work. Empty string means we
+// couldn't find the order (most commonly because the backend restarted
+// before the webhook arrived and the order was never replayed).
+func applyOrderStatus(ctx context.Context, orders *orderStore, ev stripeEvent, status string) string {
 	obj := ev.Data.Object
-	if orderID := strings.TrimSpace(obj.Metadata.OrderID); orderID != "" {
-		if o, ok := orders.get(orderID); ok {
-			o.Status = status
-			if o.PaymentIntentID == "" {
-				o.PaymentIntentID = obj.ID
-			}
-			orders.put(o)
-			log.Printf("payments.webhook: order %s → %s via metadata (pi=%s)", o.ID, status, obj.ID)
-			return
+
+	var (
+		order *pendingOrder
+		found bool
+	)
+	if id := strings.TrimSpace(obj.Metadata.OrderID); id != "" {
+		o, ok, err := orders.get(ctx, id)
+		if err != nil {
+			log.Printf("payments.webhook: get(%s): %v", id, err)
+		} else if ok {
+			order, found = o, true
 		}
 	}
-	if o, ok := orders.byPaymentIntent(obj.ID); ok {
-		o.Status = status
-		orders.put(o)
-		log.Printf("payments.webhook: order %s → %s via pi lookup (pi=%s)", o.ID, status, obj.ID)
-		return
+	if !found {
+		o, ok, err := orders.byPaymentIntent(ctx, obj.ID)
+		if err != nil {
+			log.Printf("payments.webhook: byPI(%s): %v", obj.ID, err)
+		} else if ok {
+			order, found = o, true
+		}
 	}
-	log.Printf("payments.webhook: no local order for pi=%s (type=%s) — ignoring", obj.ID, ev.Type)
+
+	_ = orders.recordEvent(ctx, orderIDOrEmpty(order), ev.Type, obj.ID, ev)
+
+	if !found {
+		log.Printf("payments.webhook: no local order for pi=%s (type=%s) — ignoring", obj.ID, ev.Type)
+		return ""
+	}
+	if order.PaymentIntentID == "" {
+		if err := orders.setPaymentIntent(ctx, order.ID, obj.ID); err != nil {
+			log.Printf("payments.webhook: setPI(%s): %v", order.ID, err)
+		}
+	}
+	if err := orders.setStatus(ctx, order.ID, status); err != nil {
+		log.Printf("payments.webhook: setStatus(%s): %v", order.ID, err)
+		return ""
+	}
+	log.Printf("payments.webhook: order %s → %s (pi=%s)", order.ID, status, obj.ID)
+	return order.ID
+}
+
+func orderIDOrEmpty(o *pendingOrder) string {
+	if o == nil {
+		return ""
+	}
+	return o.ID
 }

@@ -13,8 +13,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -75,8 +78,11 @@ type CheckoutShipping struct {
 // With Stripe integration the order starts as `pending_payment` — the
 // browser must then exchange `orderId` for a Stripe `clientSecret` via
 // /api/payments/intent and confirm payment with Stripe Elements.
+// `orderToken` is an HMAC-signed handle the frontend uses to build the
+// /pedido/:token status URL without exposing the raw orderId in links.
 type CheckoutResponse struct {
 	OrderID       string `json:"orderId"`
+	OrderToken    string `json:"orderToken"`
 	TotalCents    int    `json:"totalCents"`
 	ShippingCents int    `json:"shippingCents"`
 	AmountCents   int    `json:"amountCents"`
@@ -315,6 +321,38 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// staticOrNotFound returns the root handler. When STATIC_DIR points to a
+// built SPA, file requests are served from disk and any path that doesn't
+// match a file falls back to index.html so client-side routing works
+// (/pedido/:token, /privacidade, /termos, …). When STATIC_DIR is empty
+// — typical for local dev where the SPA is served by Vite on 5173 — the
+// root just returns a JSON 404 so accidental hits don't leak anything.
+func staticOrNotFound(dir string) http.HandlerFunc {
+	if dir == "" {
+		return func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		}
+	}
+	fs := http.FileServer(http.Dir(dir))
+	indexPath := dir + "/index.html"
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		// If the requested file exists under STATIC_DIR, serve it.
+		clean := strings.TrimPrefix(r.URL.Path, "/")
+		if clean != "" {
+			if fi, err := os.Stat(dir + "/" + clean); err == nil && !fi.IsDir() {
+				fs.ServeHTTP(w, r)
+				return
+			}
+		}
+		// SPA fallback.
+		http.ServeFile(w, r, indexPath)
+	}
+}
+
 func randomID(prefix string) string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
@@ -387,7 +425,7 @@ func handleProductByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
 }
 
-func handleCheckout(orders *orderStore) http.HandlerFunc {
+func handleCheckout(orders *orderStore, tokenKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -432,20 +470,23 @@ func handleCheckout(orders *orderStore) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payment method"})
 			return
 		}
+		var items []orderItem
 		total := 0
 		for _, it := range req.Items {
 			if it.Quantity <= 0 || it.Quantity > 20 {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
 				return
 			}
+			var unit int
+			var prodName string
 			found := false
 			for _, p := range catalog {
 				if p.ID == it.ProductID {
-					unit := p.PriceCents
+					unit = p.PriceCents
 					if payment == "pix" {
 						unit = p.PixPriceCents
 					}
-					total += unit * it.Quantity
+					prodName = p.Name
 					found = true
 					break
 				}
@@ -454,6 +495,15 @@ func handleCheckout(orders *orderStore) http.HandlerFunc {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
 				return
 			}
+			total += unit * it.Quantity
+			items = append(items, orderItem{
+				ProductID:      it.ProductID,
+				ProductName:    prodName,
+				Size:           it.Size,
+				Color:          it.Color,
+				Quantity:       it.Quantity,
+				UnitPriceCents: unit,
+			})
 		}
 		shippingCents := 0
 		var shipServiceID int
@@ -469,25 +519,42 @@ func handleCheckout(orders *orderStore) http.HandlerFunc {
 			shippingCents = req.Shipping.PriceCents
 			shipServiceID = req.Shipping.ServiceID
 		}
+		amount := total + shippingCents
 		order := &pendingOrder{
 			ID:              randomID("ord_"),
+			Name:            name,
+			Email:           email,
+			Address:         address,
+			Zip:             zip,
 			TotalCents:      total,
 			ShippingCents:   shippingCents,
+			AmountCents:     amount,
 			ShippingSvcID:   shipServiceID,
 			ShippingSvcName: shipServiceName,
 			PaymentMethod:   payment,
 			Status:          "pending_payment",
 			CreatedAt:       time.Now().UTC(),
-			Email:           email,
+			Items:           items,
 		}
-		orders.put(order)
-		log.Printf("checkout: order=%s name=%q email=%q items=%d total=%d shipping=%d payment=%s zip=%s address-len=%d",
-			order.ID, name, email, len(req.Items), total, shippingCents, payment, zip, len(address))
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := orders.create(ctx, order); err != nil {
+			log.Printf("checkout: create order failed: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save order"})
+			return
+		}
+		token := ""
+		if len(tokenKey) > 0 {
+			token = makeOrderToken(tokenKey, order.ID, time.Now())
+		}
+		log.Printf("checkout: order=%s items=%d total=%d shipping=%d payment=%s zip=%s",
+			order.ID, len(order.Items), total, shippingCents, payment, zip)
 		writeJSON(w, http.StatusOK, CheckoutResponse{
 			OrderID:       order.ID,
+			OrderToken:    token,
 			TotalCents:    total,
 			ShippingCents: shippingCents,
-			AmountCents:   total + shippingCents,
+			AmountCents:   amount,
 			Status:        order.Status,
 			CreatedAt:     order.CreatedAt.Format(time.RFC3339),
 			PaymentMethod: payment,
@@ -509,6 +576,34 @@ func mapNonEmpty(s, a, b string) string {
 	}
 	return b
 }
+
+// orderTokenSecret returns the key used to HMAC order-lookup tokens. If
+// ORDER_TOKEN_SECRET is set we use it verbatim. Otherwise we derive a
+// key from STRIPE_SECRET_KEY (SHA-256 with a domain separator) so
+// existing deployments get tokens for free without a new env var.
+// Callers treat an empty result as "tokens disabled".
+func orderTokenSecret() []byte {
+	if v := strings.TrimSpace(os.Getenv("ORDER_TOKEN_SECRET")); v != "" {
+		return []byte(v)
+	}
+	stripeKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	if stripeKey == "" {
+		return nil
+	}
+	h := sha256.New()
+	h.Write([]byte("nast:order-tokens:v1"))
+	h.Write([]byte(stripeKey))
+	return h.Sum(nil)
+}
+
+// dbSentinel keeps the database/sql import genuinely used even in builds
+// that happen to only reference openDB via the main wire-up. (Placeholder
+// to appease unused-imports tooling during iterative edits.)
+var _ *sql.DB
+
+// ctxSentinel similar for context — referenced inside handlers via
+// http.Request.Context but keeps the import grounded here.
+var _ = context.Background
 
 func allowedOriginsFromEnv() map[string]struct{} {
 	raw := os.Getenv("ALLOWED_ORIGINS")
@@ -556,21 +651,53 @@ func main() {
 			mapNonEmpty(payCfg.WebhookSecret, "configured", "missing — /api/payments/webhook will reject all events"))
 	}
 	stripeCli := newStripeClient(payCfg)
-	orders := newOrderStore()
+
+	dbPath := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
+	db, err := openDB(dbPath)
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer db.Close()
+	orders := newOrderStore(db)
+	log.Printf("SQLite ready (path=%s)", mapNonEmpty(dbPath, dbPath, defaultDBPath))
+
+	tokenKey := orderTokenSecret()
+	if len(tokenKey) == 0 {
+		log.Printf("ORDER_TOKEN_SECRET not set — /api/orders/:token disabled and checkout responses omit orderToken")
+	}
+
+	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
+	if appURL == "" {
+		appURL = "http://localhost:5173"
+	}
+
+	labelWrk := newLabelWorker(orders, shipClient)
+	emailCfg := loadEmailConfig(tokenKey, appURL)
+	emailWrk := newEmailWorker(emailCfg, orders)
+	if emailCfg.APIKey == "" {
+		log.Printf("Resend: RESEND_API_KEY not set — confirmation emails disabled")
+	}
+
+	webhookDeps := webhookDeps{
+		Orders:   orders,
+		LabelJob: labelWrk,
+		EmailJob: emailWrk,
+		AppURL:   appURL,
+		TokenKey: tokenKey,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/products", handleProducts)
 	mux.HandleFunc("/api/products/", handleProductByID)
-	mux.HandleFunc("/api/checkout", handleCheckout(orders))
+	mux.HandleFunc("/api/checkout", handleCheckout(orders, tokenKey))
+	mux.HandleFunc("/api/orders/", handleOrderLookup(orders, tokenKey))
 	mux.HandleFunc("/api/payments/intent", handlePaymentsIntent(stripeCli, orders))
-	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, orders))
+	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, webhookDeps))
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	})
+	mux.HandleFunc("/", staticOrNotFound(strings.TrimSpace(os.Getenv("STATIC_DIR"))))
 
 	var h http.Handler = mux
 	h = withBodyLimit(1<<16, h) // 64KiB

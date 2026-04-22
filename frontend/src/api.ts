@@ -1,4 +1,9 @@
-import type { CheckoutResponse, PaymentIntentResponse, Product } from "./types";
+import type {
+  CheckoutResponse,
+  PaymentIntentResponse,
+  Product,
+  PublicOrder,
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -61,4 +66,6 @@ export const api = {
       `/api/shipping/quote`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
+  getOrderByToken: (token: string) =>
+    request<PublicOrder>(`/api/orders/${encodeURIComponent(token)}`),
 };

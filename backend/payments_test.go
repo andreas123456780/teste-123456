@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -86,16 +87,9 @@ func TestHandlePaymentsIntent_CreatesPI(t *testing.T) {
 	stripeAPIBaseOverride = srv.URL
 	defer func() { stripeAPIBaseOverride = origBase }()
 
-	orders := newOrderStore()
-	orders.put(&pendingOrder{
-		ID:            "ord_abc",
-		TotalCents:    8990,
-		ShippingCents: 2199,
-		PaymentMethod: "card",
-		Status:        "pending_payment",
-		CreatedAt:     time.Now(),
-		Email:         "andreas@example.com",
-	})
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putTestOrder(t, orders, "ord_abc", "andreas@example.com", "card", 11189, 2199)
 
 	handler := handlePaymentsIntent(stripe, orders)
 	body, _ := json.Marshal(paymentIntentRequest{OrderID: "ord_abc"})
@@ -130,7 +124,10 @@ func TestHandlePaymentsIntent_CreatesPI(t *testing.T) {
 		t.Fatalf("expected orderId metadata, got %q", body2)
 	}
 	// Order should now have the PI id attached.
-	o, _ := orders.get("ord_abc")
+	o, ok, err := orders.get(context.Background(), "ord_abc")
+	if err != nil || !ok {
+		t.Fatalf("get order: err=%v ok=%v", err, ok)
+	}
 	if o.PaymentIntentID != "pi_123" {
 		t.Fatalf("expected PI id attached to order, got %q", o.PaymentIntentID)
 	}
@@ -138,7 +135,8 @@ func TestHandlePaymentsIntent_CreatesPI(t *testing.T) {
 
 func TestHandlePaymentsIntent_UnknownOrder(t *testing.T) {
 	stripe := &stripeClient{cfg: paymentsConfig{SecretKey: "sk_test"}, http: http.DefaultClient}
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body, _ := json.Marshal(paymentIntentRequest{OrderID: "ord_missing"})
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/intent", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -150,7 +148,8 @@ func TestHandlePaymentsIntent_UnknownOrder(t *testing.T) {
 
 func TestHandlePaymentsIntent_Unconfigured(t *testing.T) {
 	stripe := &stripeClient{cfg: paymentsConfig{}, http: http.DefaultClient}
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/intent", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
 	handlePaymentsIntent(stripe, orders)(rr, req)
@@ -161,14 +160,9 @@ func TestHandlePaymentsIntent_Unconfigured(t *testing.T) {
 
 func TestHandlePaymentsWebhook_MarksPaid(t *testing.T) {
 	secret := "whsec_test"
-	orders := newOrderStore()
-	orders.put(&pendingOrder{
-		ID:            "ord_abc",
-		TotalCents:    8990,
-		PaymentMethod: "card",
-		Status:        "pending_payment",
-		CreatedAt:     time.Now(),
-	})
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putTestOrder(t, orders, "ord_abc", "andreas@example.com", "card", 8990, 0)
 
 	payload := []byte(`{"id":"evt_1","type":"payment_intent.succeeded","data":{"object":{"id":"pi_123","object":"payment_intent","status":"succeeded","amount":8990,"amount_received":8990,"metadata":{"orderId":"ord_abc"}}}}`)
 	ts := time.Now().Unix()
@@ -181,23 +175,27 @@ func TestHandlePaymentsWebhook_MarksPaid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/webhook", bytes.NewReader(payload))
 	req.Header.Set("Stripe-Signature", "t="+strconv.FormatInt(ts, 10)+",v1="+sig)
 	rr := httptest.NewRecorder()
-	handlePaymentsWebhook(paymentsConfig{WebhookSecret: secret}, orders)(rr, req)
+	handlePaymentsWebhook(paymentsConfig{WebhookSecret: secret}, webhookDeps{Orders: orders})(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
 	}
-	o, _ := orders.get("ord_abc")
+	o, ok, err := orders.get(context.Background(), "ord_abc")
+	if err != nil || !ok {
+		t.Fatalf("get order: err=%v ok=%v", err, ok)
+	}
 	if o.Status != "paid" {
 		t.Fatalf("expected paid, got %q", o.Status)
 	}
 }
 
 func TestHandlePaymentsWebhook_InvalidSignature(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/webhook", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Stripe-Signature", "t=1,v1=bogus")
 	rr := httptest.NewRecorder()
-	handlePaymentsWebhook(paymentsConfig{WebhookSecret: "whsec_x"}, orders)(rr, req)
+	handlePaymentsWebhook(paymentsConfig{WebhookSecret: "whsec_x"}, webhookDeps{Orders: orders})(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rr.Code)
 	}

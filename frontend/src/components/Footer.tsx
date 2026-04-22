@@ -34,10 +34,10 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             Ajuda
           </div>
           <ul className="space-y-2">
-            <li>Trocas e devoluções</li>
-            <li>Envio e rastreio</li>
-            <li>Guia de medidas</li>
-            <li>Contato</li>
+            <li><a href="/termos" className="hover:text-white">Trocas e devoluções</a></li>
+            <li><a href="/termos" className="hover:text-white">Envio e rastreio</a></li>
+            <li><a href="/privacidade" className="hover:text-white">Privacidade</a></li>
+            <li><a href="/termos" className="hover:text-white">Termos de uso</a></li>
           </ul>
         </div>
         <div>
