@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -93,7 +94,8 @@ func TestProductByID_NotFound(t *testing.T) {
 }
 
 func TestCheckout_ValidCard(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 2, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -105,7 +107,7 @@ func TestCheckout_ValidCard(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders)(rr, req)
+	handleCheckout(orders, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -122,13 +124,18 @@ func TestCheckout_ValidCard(t *testing.T) {
 	if out.AmountCents != out.TotalCents+out.ShippingCents {
 		t.Fatalf("amount mismatch: %d != %d+%d", out.AmountCents, out.TotalCents, out.ShippingCents)
 	}
-	if _, ok := orders.get(out.OrderID); !ok {
-		t.Fatalf("order %s not stored", out.OrderID)
+	if out.OrderToken == "" {
+		t.Fatalf("expected orderToken in response")
+	}
+	_, ok, err := orders.get(context.Background(), out.OrderID)
+	if err != nil || !ok {
+		t.Fatalf("order %s not stored (err=%v)", out.OrderID, err)
 	}
 }
 
 func TestCheckout_ValidPix(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -140,7 +147,7 @@ func TestCheckout_ValidPix(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders)(rr, req)
+	handleCheckout(orders, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -154,7 +161,8 @@ func TestCheckout_ValidPix(t *testing.T) {
 }
 
 func TestCheckout_WithShipping(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -171,7 +179,7 @@ func TestCheckout_WithShipping(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders)(rr, req)
+	handleCheckout(orders, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -186,7 +194,8 @@ func TestCheckout_WithShipping(t *testing.T) {
 }
 
 func TestCheckout_InvalidPaymentMethod(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -198,14 +207,15 @@ func TestCheckout_InvalidPaymentMethod(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders)(rr, req)
+	handleCheckout(orders, []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
 
 func TestCheckout_InvalidEmail(t *testing.T) {
-	orders := newOrderStore()
+	orders, _, cleanup := newTestStore(t)
+	defer cleanup()
 	body := CheckoutRequest{
 		Items:   []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1}},
 		Name:    "x",
@@ -216,7 +226,7 @@ func TestCheckout_InvalidEmail(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders)(rr, req)
+	handleCheckout(orders, []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}

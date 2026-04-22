@@ -3,10 +3,15 @@
 Site da marca **NAST**. Peças limitadas, estética minimalista e acabamento
 premium. Este repositório contém o frontend animado + o backend em Go.
 
-- **Backend:** Go 1.23, apenas stdlib, hardening embutido (security headers,
-  CORS por allowlist, rate limit por IP, validação e limites de body).
+- **Backend:** Go 1.25, apenas stdlib + `modernc.org/sqlite` (SQLite puro
+  Go), hardening embutido (security headers, CORS por allowlist, rate
+  limit por IP, validação e limites de body, persistência em SQLite com
+  migrations, workers assíncronos para etiqueta SuperFrete + e-mail
+  transacional Resend).
 - **Frontend:** React 19 + Vite + TypeScript, Tailwind v4, Framer Motion,
-  fotos reais dos produtos e tabela de medidas lateral.
+  fotos reais dos produtos e tabela de medidas lateral, página pública
+  `/pedido/:token` para acompanhamento e páginas legais (privacidade,
+  termos, banner de cookies LGPD).
 
 ## Estrutura
 
@@ -119,6 +124,33 @@ npm run build
 
 A SPA também funciona sem o backend — há um catálogo de fallback equivalente
 ao seed em memória do Go.
+
+### Persistência, tokens e jobs
+
+- Pedidos são persistidos em **SQLite** (padrão `data/nast.db`).
+  Migrations vivem em `backend/migrations/*.sql` e são aplicadas
+  automaticamente no boot (idempotentes, ordenadas).
+- Cada pedido recebe um **token HMAC** (`orderToken`) que o frontend usa
+  para construir o link `/pedido/:token`. A chave vem de
+  `ORDER_TOKEN_SECRET`; se vazia, é derivada de `STRIPE_SECRET_KEY`
+  (rotacionar a chave invalida links antigos).
+- O webhook `payment_intent.succeeded` enfileira **dois jobs** em
+  goroutines:
+  - **Etiqueta SuperFrete** — `cart` → `checkout` → `generate` → `print`,
+    guardando tracking code e URL do PDF no pedido.
+  - **E-mail de confirmação** (Resend) — template em PT-BR com link do
+    pedido. Desligado silenciosamente se `RESEND_API_KEY` estiver vazio.
+
+Endpoint público (sanitizado):
+
+- `GET /api/orders/:token` → `{orderId, status, items, tracking…}` com
+  e-mail mascarado (`a•••s@dominio.com`). Retorna **401** se o token for
+  inválido ou expirado (180 dias), **404** se o pedido não existir.
+
+## Deploy
+
+Veja [`DEPLOYMENT.md`](./DEPLOYMENT.md) para o guia completo (Fly.io + domínio
++ Stripe webhook + Resend). `Dockerfile` + `fly.toml` já incluídos na raiz.
 
 ## Customização rápida
 

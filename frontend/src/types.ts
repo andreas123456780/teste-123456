@@ -26,12 +26,38 @@ export type CartItem = {
 // `orderId` for a `clientSecret` via /api/payments/intent.
 export type CheckoutResponse = {
   orderId: string;
+  orderToken: string;
   totalCents: number;
   shippingCents: number;
   amountCents: number;
   status: string;
   createdAt: string;
   paymentMethod: "pix" | "card";
+};
+
+// PublicOrder mirrors the backend's sanitized order view. Fields that are
+// optional on the server are optional here too.
+export type PublicOrder = {
+  orderId: string;
+  status: string;
+  paymentMethod: "pix" | "card" | string;
+  totalCents: number;
+  shippingCents: number;
+  amountCents: number;
+  shippingName?: string;
+  trackingCode?: string;
+  trackingUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  customer: string;
+  items: Array<{
+    productId: string;
+    productName: string;
+    size?: string;
+    color?: string;
+    quantity: number;
+    unitPriceCents: number;
+  }>;
 };
 
 export type PaymentIntentResponse = {

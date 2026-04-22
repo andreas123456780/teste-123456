@@ -10,14 +10,42 @@ import { Story } from "./components/Story";
 import { Newsletter } from "./components/Newsletter";
 import { Footer } from "./components/Footer";
 import { Cart } from "./components/Cart";
+import { CookieBanner } from "./components/CookieBanner";
 import { ProductModal } from "./components/ProductModal";
 import { ScrollProgress } from "./components/ScrollProgress";
 import { LoadingScreen } from "./components/LoadingScreen";
 import { ScanIntro } from "./components/ScanIntro";
 import { shouldShowIntro } from "./lib/intro";
 import { WhatsAppButton } from "./components/WhatsAppButton";
+import { OrderStatus } from "./pages/OrderStatus";
+import { Privacy } from "./pages/Privacy";
+import { Terms } from "./pages/Terms";
 
 const WHATSAPP_NUMBER = "5511994281802";
+const SUPPORT_EMAIL = "contato@nast.com.br";
+
+// Minimal route matcher. We avoid react-router to keep the bundle lean;
+// the app only has three top-level routes plus the storefront. Each route
+// reads window.location once on mount and renders accordingly. SPA
+// navigation is not needed — users land on these via email links or
+// direct navigation.
+type Route =
+  | { kind: "home" }
+  | { kind: "order"; token: string }
+  | { kind: "privacy" }
+  | { kind: "terms" };
+
+function parseRoute(pathname: string): Route {
+  const orderMatch = pathname.match(/^\/pedido\/([^/?#]+)\/?$/);
+  if (orderMatch) return { kind: "order", token: decodeURIComponent(orderMatch[1]) };
+  if (pathname === "/privacidade" || pathname === "/privacidade/") {
+    return { kind: "privacy" };
+  }
+  if (pathname === "/termos" || pathname === "/termos/") {
+    return { kind: "terms" };
+  }
+  return { kind: "home" };
+}
 
 function cartKey(id: string, size: string, color: string) {
   return `${id}|${size}|${color}`;
@@ -36,6 +64,28 @@ function loadCart(): CartItem[] {
 }
 
 function App() {
+  const route = useMemo(() => parseRoute(window.location.pathname), []);
+
+  if (route.kind === "order") {
+    return <OrderStatus token={route.token} whatsAppNumber={WHATSAPP_NUMBER} />;
+  }
+  if (route.kind === "privacy") {
+    return (
+      <Privacy
+        whatsAppNumber={WHATSAPP_NUMBER}
+        supportEmail={SUPPORT_EMAIL}
+      />
+    );
+  }
+  if (route.kind === "terms") {
+    return (
+      <Terms whatsAppNumber={WHATSAPP_NUMBER} supportEmail={SUPPORT_EMAIL} />
+    );
+  }
+  return <Home />;
+}
+
+function Home() {
   const [products, setProducts] = useState<Product[]>(FALLBACK_PRODUCTS);
   const [loading, setLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
@@ -155,6 +205,7 @@ function App() {
       />
 
       <WhatsAppButton phone={WHATSAPP_NUMBER} />
+      <CookieBanner />
       <LoadingScreen show={loading && !introVisible} />
       {introVisible && <ScanIntro onFinish={() => setIntroVisible(false)} />}
     </div>
