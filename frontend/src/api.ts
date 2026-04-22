@@ -1,4 +1,4 @@
-import type { CheckoutResponse, Product } from "./types";
+import type { CheckoutResponse, PaymentIntentResponse, Product } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -42,10 +42,16 @@ export const api = {
     address: string;
     zipCode: string;
     paymentMethod: "pix" | "card";
+    shipping?: { serviceId: number; serviceName: string; priceCents: number };
   }) =>
     request<CheckoutResponse>(`/api/checkout`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  createPaymentIntent: (orderId: string) =>
+    request<PaymentIntentResponse>(`/api/payments/intent`, {
+      method: "POST",
+      body: JSON.stringify({ orderId }),
     }),
   quoteShipping: (payload: {
     zipCode: string;

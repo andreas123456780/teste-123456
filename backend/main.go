@@ -53,20 +53,36 @@ type CartItem struct {
 }
 
 type CheckoutRequest struct {
-	Items         []CartItem `json:"items"`
-	Name          string     `json:"name"`
-	Email         string     `json:"email"`
-	Address       string     `json:"address"`
-	ZipCode       string     `json:"zipCode"`
-	PaymentMethod string     `json:"paymentMethod"`
+	Items         []CartItem      `json:"items"`
+	Name          string          `json:"name"`
+	Email         string          `json:"email"`
+	Address       string          `json:"address"`
+	ZipCode       string          `json:"zipCode"`
+	PaymentMethod string          `json:"paymentMethod"`
+	Shipping      *CheckoutShipping `json:"shipping,omitempty"`
 }
 
+// CheckoutShipping is optional and carries the SuperFrete quote the user
+// picked on the client. The amount is folded into the PaymentIntent so a
+// single charge covers both items and freight.
+type CheckoutShipping struct {
+	ServiceID   int    `json:"serviceId"`
+	ServiceName string `json:"serviceName"`
+	PriceCents  int    `json:"priceCents"`
+}
+
+// CheckoutResponse is what the browser receives after submitting the cart.
+// With Stripe integration the order starts as `pending_payment` — the
+// browser must then exchange `orderId` for a Stripe `clientSecret` via
+// /api/payments/intent and confirm payment with Stripe Elements.
 type CheckoutResponse struct {
-	OrderID     string `json:"orderId"`
-	TotalCents  int    `json:"totalCents"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"createdAt"`
-	EstimatedAt string `json:"estimatedAt"`
+	OrderID       string `json:"orderId"`
+	TotalCents    int    `json:"totalCents"`
+	ShippingCents int    `json:"shippingCents"`
+	AmountCents   int    `json:"amountCents"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"createdAt"`
+	PaymentMethod string `json:"paymentMethod"`
 }
 
 // ----- In-memory catalog (seeded on startup) -----
@@ -371,82 +387,112 @@ func handleProductByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
 }
 
-func handleCheckout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	var req CheckoutRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		return
-	}
-	if len(req.Items) == 0 || len(req.Items) > 50 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid item count"})
-		return
-	}
-	name, ok := safeString(req.Name, 120)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
-		return
-	}
-	if !validateEmail(strings.TrimSpace(req.Email)) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
-		return
-	}
-	address, ok := safeString(req.Address, 240)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid address"})
-		return
-	}
-	zip, ok := safeString(req.ZipCode, 16)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zip"})
-		return
-	}
-	payment := strings.TrimSpace(strings.ToLower(req.PaymentMethod))
-	if payment == "" {
-		payment = "card"
-	}
-	if payment != "pix" && payment != "card" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payment method"})
-		return
-	}
-	total := 0
-	for _, it := range req.Items {
-		if it.Quantity <= 0 || it.Quantity > 20 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
+func handleCheckout(orders *orderStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
-		found := false
-		for _, p := range catalog {
-			if p.ID == it.ProductID {
-				unit := p.PriceCents
-				if payment == "pix" {
-					unit = p.PixPriceCents
+		var req CheckoutRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if len(req.Items) == 0 || len(req.Items) > 50 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid item count"})
+			return
+		}
+		name, ok := safeString(req.Name, 120)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
+			return
+		}
+		email := strings.TrimSpace(req.Email)
+		if !validateEmail(email) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
+			return
+		}
+		address, ok := safeString(req.Address, 240)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid address"})
+			return
+		}
+		zip, ok := safeString(req.ZipCode, 16)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zip"})
+			return
+		}
+		payment := strings.TrimSpace(strings.ToLower(req.PaymentMethod))
+		if payment == "" {
+			payment = "card"
+		}
+		if payment != "pix" && payment != "card" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payment method"})
+			return
+		}
+		total := 0
+		for _, it := range req.Items {
+			if it.Quantity <= 0 || it.Quantity > 20 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
+				return
+			}
+			found := false
+			for _, p := range catalog {
+				if p.ID == it.ProductID {
+					unit := p.PriceCents
+					if payment == "pix" {
+						unit = p.PixPriceCents
+					}
+					total += unit * it.Quantity
+					found = true
+					break
 				}
-				total += unit * it.Quantity
-				found = true
-				break
+			}
+			if !found {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
+				return
 			}
 		}
-		if !found {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
-			return
+		shippingCents := 0
+		var shipServiceID int
+		var shipServiceName string
+		if req.Shipping != nil {
+			if req.Shipping.PriceCents < 0 || req.Shipping.PriceCents > 500_000 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid shipping price"})
+				return
+			}
+			if n, okSN := safeString(req.Shipping.ServiceName, 80); okSN {
+				shipServiceName = n
+			}
+			shippingCents = req.Shipping.PriceCents
+			shipServiceID = req.Shipping.ServiceID
 		}
+		order := &pendingOrder{
+			ID:              randomID("ord_"),
+			TotalCents:      total,
+			ShippingCents:   shippingCents,
+			ShippingSvcID:   shipServiceID,
+			ShippingSvcName: shipServiceName,
+			PaymentMethod:   payment,
+			Status:          "pending_payment",
+			CreatedAt:       time.Now().UTC(),
+			Email:           email,
+		}
+		orders.put(order)
+		log.Printf("checkout: order=%s name=%q email=%q items=%d total=%d shipping=%d payment=%s zip=%s address-len=%d",
+			order.ID, name, email, len(req.Items), total, shippingCents, payment, zip, len(address))
+		writeJSON(w, http.StatusOK, CheckoutResponse{
+			OrderID:       order.ID,
+			TotalCents:    total,
+			ShippingCents: shippingCents,
+			AmountCents:   total + shippingCents,
+			Status:        order.Status,
+			CreatedAt:     order.CreatedAt.Format(time.RFC3339),
+			PaymentMethod: payment,
+		})
 	}
-	resp := CheckoutResponse{
-		OrderID:     randomID("ord_"),
-		TotalCents:  total,
-		Status:      "confirmed",
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		EstimatedAt: time.Now().Add(5 * 24 * time.Hour).UTC().Format(time.RFC3339),
-	}
-	log.Printf("checkout: order=%s name=%q email=%q items=%d total=%d payment=%s zip=%s address-len=%d",
-		resp.OrderID, name, req.Email, len(req.Items), total, payment, zip, len(address))
-	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -454,6 +500,15 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // ----- Server bootstrap -----
+
+// mapNonEmpty returns a if s is non-empty, b otherwise. Used for terse
+// startup logging.
+func mapNonEmpty(s, a, b string) string {
+	if strings.TrimSpace(s) != "" {
+		return a
+	}
+	return b
+}
 
 func allowedOriginsFromEnv() map[string]struct{} {
 	raw := os.Getenv("ALLOWED_ORIGINS")
@@ -486,18 +541,30 @@ func main() {
 
 	shipCfg := loadShippingConfig()
 	if shipCfg.AccessToken == "" {
-		log.Printf("Melhor Envio: token not configured — /api/shipping/* will return 503")
+		log.Printf("SuperFrete: token not configured — /api/shipping/* will return 503")
 	} else {
-		log.Printf("Melhor Envio: %s origin=%s", shipCfg.BaseURL, shipCfg.OriginZip)
+		log.Printf("SuperFrete: %s origin=%s", shipCfg.BaseURL, shipCfg.OriginZip)
 	}
 	shipClient := newShippingClient(shipCfg)
 	shipCache := newQuoteCache(5 * time.Minute)
+
+	payCfg := loadPaymentsConfig()
+	if payCfg.SecretKey == "" {
+		log.Printf("Stripe: secret key not configured — /api/payments/* will return 503")
+	} else {
+		log.Printf("Stripe: secret key loaded (webhook secret %s)",
+			mapNonEmpty(payCfg.WebhookSecret, "configured", "missing — /api/payments/webhook will reject all events"))
+	}
+	stripeCli := newStripeClient(payCfg)
+	orders := newOrderStore()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/products", handleProducts)
 	mux.HandleFunc("/api/products/", handleProductByID)
-	mux.HandleFunc("/api/checkout", handleCheckout)
+	mux.HandleFunc("/api/checkout", handleCheckout(orders))
+	mux.HandleFunc("/api/payments/intent", handlePaymentsIntent(stripeCli, orders))
+	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, orders))
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))

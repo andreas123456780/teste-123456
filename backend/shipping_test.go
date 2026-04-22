@@ -98,7 +98,7 @@ func TestBuildPackages_RejectsBadInput(t *testing.T) {
 }
 
 func TestNormalizeQuotes(t *testing.T) {
-	raw := []meQuote{
+	raw := []sfQuote{
 		{ID: 1, Name: "PAC", Price: json.RawMessage(`"19.90"`), DeliveryRange: struct {
 			Min int `json:"min"`
 			Max int `json:"max"`
@@ -107,12 +107,12 @@ func TestNormalizeQuotes(t *testing.T) {
 			Name    string `json:"name"`
 			Picture string `json:"picture"`
 		}{ID: 1, Name: "Correios"}},
-		{ID: 2, Name: "Jadlog .Package", Price: json.RawMessage(`22.5`), DeliveryTime: 4, Company: struct {
+		{ID: 2, Name: "SEDEX", Price: json.RawMessage(`22.5`), DeliveryTime: 4, Company: struct {
 			ID      int    `json:"id"`
 			Name    string `json:"name"`
 			Picture string `json:"picture"`
-		}{ID: 2, Name: "Jadlog"}},
-		{ID: 3, Name: "Loggi", Error: "CEP não atendido"},
+		}{ID: 1, Name: "Correios"}},
+		{ID: 17, Name: "Mini Envios", Error: "CEP não atendido"},
 	}
 	got := normalizeQuotes(raw)
 	if len(got) != 3 {
@@ -122,10 +122,10 @@ func TestNormalizeQuotes(t *testing.T) {
 		t.Fatalf("PAC cents = %d", got[0].PriceCents)
 	}
 	if got[1].PriceCents != 2250 {
-		t.Fatalf("Jadlog cents = %d", got[1].PriceCents)
+		t.Fatalf("SEDEX cents = %d", got[1].PriceCents)
 	}
 	if got[1].DeliveryMin != 4 || got[1].DeliveryMax != 4 {
-		t.Fatalf("Jadlog delivery = %d/%d", got[1].DeliveryMin, got[1].DeliveryMax)
+		t.Fatalf("SEDEX delivery = %d/%d", got[1].DeliveryMin, got[1].DeliveryMax)
 	}
 	if got[2].Error == "" {
 		t.Fatal("expected error preserved")
@@ -135,11 +135,30 @@ func TestNormalizeQuotes(t *testing.T) {
 	}
 }
 
+func TestMergeVolumes(t *testing.T) {
+	pkgs := []ShippingPackage{
+		{Width: 25, Height: 3, Length: 30, Weight: 0.22, Quantity: 2, InsuranceValue: 89.90},
+		{Width: 28, Height: 4, Length: 32, Weight: 0.28, Quantity: 1, InsuranceValue: 99.90},
+	}
+	vol, insurance := mergeVolumes(pkgs)
+	if vol.Width != 28 || vol.Height != 4 || vol.Length != 32 {
+		t.Fatalf("volume dimensions = %+v", vol)
+	}
+	// Weight summed by quantity: 0.22*2 + 0.28*1 = 0.72
+	if vol.Weight < 0.71 || vol.Weight > 0.73 {
+		t.Fatalf("volume weight = %v", vol.Weight)
+	}
+	// Insurance: 89.90*2 + 99.90*1 = 279.70
+	if insurance < 279.6 || insurance > 279.8 {
+		t.Fatalf("insurance = %v", insurance)
+	}
+}
+
 func TestShippingQuote_EndToEnd(t *testing.T) {
-	// Fake Melhor Envio: check inbound auth + payload, return a canned quote.
-	var captured meCalculateRequest
+	// Fake SuperFrete: check inbound auth + payload, return a canned quote.
+	var captured sfCalculatorRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v2/me/shipment/calculate" {
+		if r.URL.Path != "/api/v0/calculator" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
@@ -205,8 +224,11 @@ func TestShippingQuote_EndToEnd(t *testing.T) {
 	if captured.To.PostalCode != "04567000" {
 		t.Fatalf("to zip = %q (should be digits-only)", captured.To.PostalCode)
 	}
-	if len(captured.Products) != 2 {
-		t.Fatalf("want 2 consolidated packages, got %d", len(captured.Products))
+	if captured.Package.Weight <= 0 {
+		t.Fatalf("expected aggregated weight > 0, got %v", captured.Package.Weight)
+	}
+	if captured.Services == "" {
+		t.Fatalf("expected services filter to be populated")
 	}
 }
 

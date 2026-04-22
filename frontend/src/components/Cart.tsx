@@ -6,6 +6,7 @@ import { formatBRL } from "../utils/format";
 import { Close, Minus, Plus, Lock } from "./icons";
 import { ProductArt } from "./ProductArt";
 import { ShippingQuote } from "./ShippingQuote";
+import { StripePaymentStep } from "./StripePaymentStep";
 
 type Props = {
   open: boolean;
@@ -27,12 +28,22 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
   });
   const [loading, setLoading] = useState(false);
   const [order, setOrder] = useState<{ id: string; total: number } | null>(null);
+  const [payment, setPayment] = useState<
+    | {
+        clientSecret: string;
+        orderId: string;
+        amountCents: number;
+        method: "pix" | "card";
+      }
+    | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [usePix, setUsePix] = useState(true);
   const [shipping, setShipping] = useState<ShippingOption | null>(null);
 
   const handleClose = () => {
     setOrder(null);
+    setPayment(null);
     onClose();
   };
 
@@ -54,7 +65,8 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     setLoading(true);
     setError(null);
     try {
-      const res = await api.checkout({
+      const method: "pix" | "card" = usePix ? "pix" : "card";
+      const checkoutRes = await api.checkout({
         items: items.map((it) => ({
           productId: it.product.id,
           quantity: it.quantity,
@@ -65,22 +77,39 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
         email: form.email,
         address: form.address,
         zipCode: form.zipCode,
-        paymentMethod: usePix ? "pix" : "card",
+        paymentMethod: method,
+        shipping: shipping
+          ? {
+              serviceId: shipping.serviceId,
+              serviceName: shipping.serviceName,
+              priceCents: shipping.priceCents,
+            }
+          : undefined,
       });
-      // Backend only totals product lines; fold in the client-picked shipping
-      // so the confirmation screen matches the pre-checkout total the user saw.
-      setOrder({ id: res.orderId, total: res.totalCents + shippingCents });
-      setShipping(null);
-      onClear();
+      const intent = await api.createPaymentIntent(checkoutRes.orderId);
+      setPayment({
+        clientSecret: intent.clientSecret,
+        orderId: checkoutRes.orderId,
+        amountCents: checkoutRes.amountCents,
+        method,
+      });
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Não foi possível finalizar o pedido. Tente novamente.",
+          : "Não foi possível iniciar o pagamento. Tente novamente.",
       );
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePaid = () => {
+    if (!payment) return;
+    setOrder({ id: payment.orderId, total: payment.amountCents });
+    setPayment(null);
+    setShipping(null);
+    onClear();
   };
 
   return (
@@ -123,7 +152,15 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              {order ? (
+              {payment ? (
+                <StripePaymentStep
+                  clientSecret={payment.clientSecret}
+                  amountCents={payment.amountCents}
+                  method={payment.method}
+                  onPaid={handlePaid}
+                  onCancel={() => setPayment(null)}
+                />
+              ) : order ? (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -273,7 +310,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
               )}
             </div>
 
-            {!order && items.length > 0 && (
+            {!order && !payment && items.length > 0 && (
               <form
                 onSubmit={submit}
                 className="flex flex-col gap-3 border-t border-white/10 px-6 py-4"
