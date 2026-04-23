@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   adminApi,
+  adminAuthApi,
   adminCouponsApi,
   type AdminCouponPayload,
   type AdminProductPayload,
+  type AdminStats,
 } from "../api";
 import type { Coupon, Product } from "../types";
 
 // Admin is an intentionally plain, no-deps management screen. Operators
-// paste the ADMIN_TOKEN once — it is persisted to localStorage so the
-// page survives reloads. All network calls add the header
-// X-Admin-Token; the backend enforces authentication (constant-time
-// compare) so the UI never ships privileged data statically.
+// authenticate either with username+password (preferred, when the
+// backend has ADMIN_USERNAME + ADMIN_PASSWORD_HASH configured) or by
+// pasting a static ADMIN_TOKEN as a fallback. The issued session token
+// is persisted to localStorage; every request carries X-Admin-Token
+// and the backend enforces authentication (HMAC verify or constant-time
+// compare). The UI never ships privileged data statically.
 const TOKEN_STORAGE = "nast:admin-token:v1";
 
-type Tab = "products" | "coupons";
+type Tab = "dashboard" | "products" | "coupons";
 
 function emptyProduct(): AdminProductPayload {
   return {
@@ -70,16 +74,15 @@ function parseCsv(value: string): string[] {
 
 export function AdminPage() {
   const [token, setToken] = useState<string>(readToken);
-  const [tokenDraft, setTokenDraft] = useState<string>(token);
-  const [tab, setTab] = useState<Tab>("products");
+  const [tab, setTab] = useState<Tab>("dashboard");
 
-  const login = () => {
+  const onLoggedIn = (newToken: string) => {
     try {
-      window.localStorage.setItem(TOKEN_STORAGE, tokenDraft);
+      window.localStorage.setItem(TOKEN_STORAGE, newToken);
     } catch {
       // localStorage unavailable (private mode) — still set in-memory.
     }
-    setToken(tokenDraft);
+    setToken(newToken);
   };
 
   const logout = () => {
@@ -89,35 +92,10 @@ export function AdminPage() {
       // noop
     }
     setToken("");
-    setTokenDraft("");
   };
 
   if (!token) {
-    return (
-      <main className="mx-auto max-w-md px-6 py-20">
-        <h1 className="mb-6 text-3xl font-bold">NAST — Admin</h1>
-        <p className="mb-4 text-sm text-neutral-600">
-          Informe o token de administração (<code>ADMIN_TOKEN</code> do
-          backend). O token fica salvo no seu navegador.
-        </p>
-        <input
-          type="password"
-          autoComplete="off"
-          placeholder="X-Admin-Token"
-          value={tokenDraft}
-          onChange={(e) => setTokenDraft(e.target.value)}
-          className="mb-3 w-full rounded border border-neutral-300 px-3 py-2"
-        />
-        <button
-          type="button"
-          onClick={login}
-          disabled={!tokenDraft}
-          className="w-full rounded bg-black px-4 py-2 text-white disabled:opacity-50"
-        >
-          Entrar
-        </button>
-      </main>
-    );
+    return <LoginForm onLoggedIn={onLoggedIn} />;
   }
 
   return (
@@ -135,6 +113,7 @@ export function AdminPage() {
 
       <nav className="mb-6 flex gap-2 border-b border-neutral-300">
         {([
+          ["dashboard", "Dashboard"],
           ["products", "Produtos"],
           ["coupons", "Cupons"],
         ] as const).map(([id, label]) => {
@@ -156,9 +135,329 @@ export function AdminPage() {
         })}
       </nav>
 
+      {tab === "dashboard" && <DashboardAdmin token={token} />}
       {tab === "products" && <ProductsAdmin token={token} />}
       {tab === "coupons" && <CouponsAdmin token={token} />}
     </main>
+  );
+}
+
+// ----- Login form -----
+
+function LoginForm({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
+  const [mode, setMode] = useState<"credentials" | "token">("credentials");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submitCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !password) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await adminAuthApi.login(username, password);
+      onLoggedIn(res.token);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.includes("503")) {
+        // Login endpoint not configured — fall back to static token mode.
+        setMode("token");
+        setErr(
+          "Login user/senha não configurado no backend. Use token estático.",
+        );
+      } else {
+        setErr("Credenciais inválidas.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitToken = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenDraft) return;
+    onLoggedIn(tokenDraft);
+  };
+
+  return (
+    <main className="mx-auto max-w-md px-6 py-20">
+      <h1 className="mb-6 text-3xl font-bold">NAST — Admin</h1>
+      {mode === "credentials" ? (
+        <form onSubmit={submitCredentials} className="space-y-3">
+          <p className="mb-4 text-sm text-neutral-600">
+            Login de administrador. A sessão expira em 24h.
+          </p>
+          <input
+            type="text"
+            autoComplete="username"
+            placeholder="Usuário"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full rounded border border-neutral-300 px-3 py-2"
+          />
+          <input
+            type="password"
+            autoComplete="current-password"
+            placeholder="Senha"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded border border-neutral-300 px-3 py-2"
+          />
+          {err && <p className="text-sm text-red-600">{err}</p>}
+          <button
+            type="submit"
+            disabled={busy || !username || !password}
+            className="w-full rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+          >
+            {busy ? "Entrando…" : "Entrar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setErr("");
+              setMode("token");
+            }}
+            className="w-full text-center text-xs text-neutral-500 underline"
+          >
+            Usar token estático (ADMIN_TOKEN)
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={submitToken} className="space-y-3">
+          <p className="mb-4 text-sm text-neutral-600">
+            Informe o <code>ADMIN_TOKEN</code> configurado no backend.
+          </p>
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder="X-Admin-Token"
+            value={tokenDraft}
+            onChange={(e) => setTokenDraft(e.target.value)}
+            className="w-full rounded border border-neutral-300 px-3 py-2"
+          />
+          {err && <p className="text-sm text-red-600">{err}</p>}
+          <button
+            type="submit"
+            disabled={!tokenDraft}
+            className="w-full rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+          >
+            Entrar
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setErr("");
+              setMode("credentials");
+            }}
+            className="w-full text-center text-xs text-neutral-500 underline"
+          >
+            Voltar para login user/senha
+          </button>
+        </form>
+      )}
+    </main>
+  );
+}
+
+// ----- Dashboard tab -----
+
+function DashboardAdmin({ token }: { token: string }) {
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [err, setErr] = useState("");
+
+  const refresh = useCallback(async () => {
+    setErr("");
+    try {
+      const s = await adminAuthApi.stats(token);
+      setStats(s);
+    } catch (e) {
+      setErr((e as Error).message);
+      setStats(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    // refresh() only touches state after the fetch resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+  }, [refresh]);
+
+  if (err) {
+    return (
+      <section className="space-y-3">
+        <p className="text-sm text-red-600">Erro: {err}</p>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="rounded border border-neutral-300 px-3 py-1 text-sm"
+        >
+          Tentar novamente
+        </button>
+      </section>
+    );
+  }
+  if (!stats) return <p className="text-sm text-neutral-500">Carregando…</p>;
+
+  return (
+    <section className="space-y-8">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Kpi label="Pedidos totais" value={stats.orders.total.toString()} />
+        <Kpi label="Pagos" value={stats.orders.paid.toString()} />
+        <Kpi label="Pendentes" value={stats.orders.pendingPayment.toString()} />
+        <Kpi label="Cancelados" value={stats.orders.canceled.toString()} />
+        <Kpi label="Receita bruta" value={moneyBR(stats.revenue.grossCents)} />
+        <Kpi
+          label="Frete arrecadado"
+          value={moneyBR(stats.revenue.shippingCents)}
+        />
+        <Kpi
+          label="Descontos aplicados"
+          value={moneyBR(stats.revenue.discountCents)}
+        />
+        <Kpi
+          label="Ticket médio"
+          value={moneyBR(stats.revenue.avgTicketCents)}
+        />
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Mais vendidos</h2>
+        {stats.topProducts.length === 0 ? (
+          <p className="text-sm text-neutral-500">Nenhuma venda ainda.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-left">
+                <th className="py-2">Produto</th>
+                <th className="py-2">Qtd vendida</th>
+                <th className="py-2">Receita</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.topProducts.map((p) => (
+                <tr key={p.productId} className="border-b border-neutral-100">
+                  <td className="py-2">{p.productName || p.productId}</td>
+                  <td className="py-2">{p.quantity}</td>
+                  <td className="py-2">{moneyBR(p.grossCents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Receita por dia (últimos 30d)</h2>
+        {stats.revenueByDay.length === 0 ? (
+          <p className="text-sm text-neutral-500">Sem receita no período.</p>
+        ) : (
+          <DailyRevenueChart data={stats.revenueByDay} />
+        )}
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Últimos pedidos</h2>
+        {stats.recentOrders.length === 0 ? (
+          <p className="text-sm text-neutral-500">Nenhum pedido.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-left">
+                <th className="py-2">ID</th>
+                <th className="py-2">Cliente</th>
+                <th className="py-2">Método</th>
+                <th className="py-2">Status</th>
+                <th className="py-2">Valor</th>
+                <th className="py-2">Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.recentOrders.map((o) => (
+                <tr key={o.id} className="border-b border-neutral-100">
+                  <td className="py-2 font-mono text-xs">{o.id.slice(0, 10)}</td>
+                  <td className="py-2">{o.customerName}</td>
+                  <td className="py-2">{o.paymentMethod}</td>
+                  <td className="py-2">
+                    <StatusBadge status={o.status} />
+                  </td>
+                  <td className="py-2">{moneyBR(o.amountCents)}</td>
+                  <td className="py-2 text-neutral-500">
+                    {new Date(o.createdAt).toLocaleString("pt-BR")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <p className="text-xs text-neutral-400">
+        Atualizado em {new Date(stats.generatedAt).toLocaleString("pt-BR")}.{" "}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="underline"
+        >
+          Atualizar
+        </button>
+      </p>
+    </section>
+  );
+}
+
+function Kpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-neutral-200 p-3">
+      <p className="text-xs uppercase tracking-wide text-neutral-500">{label}</p>
+      <p className="mt-1 text-xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    paid: "bg-green-100 text-green-800",
+    shipped: "bg-blue-100 text-blue-800",
+    pending_payment: "bg-yellow-100 text-yellow-800",
+    failed: "bg-red-100 text-red-800",
+    canceled: "bg-neutral-200 text-neutral-700",
+  };
+  const cls = map[status] ?? "bg-neutral-100 text-neutral-700";
+  return (
+    <span className={`rounded px-2 py-0.5 text-xs ${cls}`}>{status}</span>
+  );
+}
+
+function DailyRevenueChart({
+  data,
+}: {
+  data: { day: string; grossCents: number; orderCount: number }[];
+}) {
+  const max = Math.max(1, ...data.map((d) => d.grossCents));
+  return (
+    <div className="flex items-end gap-1 overflow-x-auto" style={{ height: 120 }}>
+      {data.map((d) => {
+        const h = Math.max(2, Math.round((d.grossCents / max) * 100));
+        return (
+          <div
+            key={d.day}
+            className="flex min-w-[18px] flex-col items-center"
+            title={`${d.day}: ${moneyBR(d.grossCents)} (${d.orderCount} pedidos)`}
+          >
+            <div
+              className="w-full rounded-sm bg-black"
+              style={{ height: `${h}%` }}
+            />
+            <span className="mt-1 text-[10px] text-neutral-400">
+              {d.day.slice(5)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
