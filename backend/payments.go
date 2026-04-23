@@ -304,10 +304,11 @@ func verifyStripeSignature(secret string, header string, payload []byte, now tim
 // a SuperFrete mock server.
 type webhookDeps struct {
 	Orders    *orderStore
-	LabelJob  labelEnqueuer // may be nil in tests
-	EmailJob  emailEnqueuer // may be nil (no Resend configured)
-	AppURL    string        // public origin, used to build order-lookup links
-	TokenKey  []byte        // HMAC key for order tokens
+	Products  *productsStore // may be nil in tests; stock decrement skipped then
+	LabelJob  labelEnqueuer  // may be nil in tests
+	EmailJob  emailEnqueuer  // may be nil (no Resend configured)
+	AppURL    string         // public origin, used to build order-lookup links
+	TokenKey  []byte         // HMAC key for order tokens
 }
 
 // labelEnqueuer is implemented by anything that can (asynchronously)
@@ -355,6 +356,9 @@ func handlePaymentsWebhook(cfg paymentsConfig, deps webhookDeps) http.HandlerFun
 		switch ev.Type {
 		case "payment_intent.succeeded":
 			if orderID := applyOrderStatus(ctx, deps.Orders, ev, "paid"); orderID != "" {
+				if deps.Products != nil {
+					decrementOrderStock(ctx, deps.Orders, deps.Products, orderID)
+				}
 				if deps.LabelJob != nil {
 					deps.LabelJob.Enqueue(orderID)
 				}
@@ -368,6 +372,28 @@ func handlePaymentsWebhook(cfg paymentsConfig, deps webhookDeps) http.HandlerFun
 			// Ignore other events; still ack to stop retries.
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
+	}
+}
+
+// decrementOrderStock loads the paid order and reduces the stock of each
+// line item. The store guarantees the stock never goes below zero, so
+// this is safe to call even for oversells. Operators see a log warning
+// when a line couldn't be fully deducted.
+func decrementOrderStock(ctx context.Context, orders *orderStore, products *productsStore, orderID string) {
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil || !ok {
+		log.Printf("stock: load order %s: ok=%v err=%v", orderID, ok, err)
+		return
+	}
+	for _, it := range o.Items {
+		rem, err := products.decrementStock(ctx, it.ProductID, it.Quantity)
+		if err != nil {
+			log.Printf("stock: decrement %s qty=%d: %v", it.ProductID, it.Quantity, err)
+			continue
+		}
+		if rem > 0 {
+			log.Printf("stock: oversold product=%s order=%s missing=%d", it.ProductID, orderID, rem)
+		}
 	}
 }
 

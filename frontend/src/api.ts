@@ -69,3 +69,54 @@ export const api = {
   getOrderByToken: (token: string) =>
     request<PublicOrder>(`/api/orders/${encodeURIComponent(token)}`),
 };
+
+// Admin API — callers supply the X-Admin-Token header. Token is stored
+// in localStorage client-side (see useAdminToken). Never commit real
+// tokens: operators enter them in the /admin login form.
+async function adminRequest<T>(
+  path: string,
+  token: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body != null ? { "Content-Type": "application/json" } : {}),
+      "X-Admin-Token": token,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (res.status === 204) return undefined as unknown as T;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
+
+export type AdminProductPayload = Product & {
+  hidden?: boolean;
+  sortOrder?: number;
+};
+
+export const adminApi = {
+  list: (token: string) =>
+    adminRequest<Product[]>(`/api/admin/products`, token),
+  create: (token: string, payload: AdminProductPayload) =>
+    adminRequest<Product>(`/api/admin/products`, token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (token: string, id: string, payload: AdminProductPayload) =>
+    adminRequest<Product>(
+      `/api/admin/products/${encodeURIComponent(id)}`,
+      token,
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+  remove: (token: string, id: string) =>
+    adminRequest<void>(
+      `/api/admin/products/${encodeURIComponent(id)}`,
+      token,
+      { method: "DELETE" },
+    ),
+};

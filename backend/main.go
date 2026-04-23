@@ -16,7 +16,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -252,7 +251,70 @@ func clientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	return peerHost
 }
 
-func withSecurityHeaders(next http.Handler) http.Handler {
+// buildCSP returns the Content-Security-Policy value that matches the
+// current deployment. When STATIC_DIR is set we serve a rendered React
+// SPA that embeds Stripe Elements (js.stripe.com, hooks.stripe.com) and
+// optionally Plausible analytics. The policy is still restrictive: no
+// eval, no inline scripts, no arbitrary frames, image origins limited
+// to self/data/https.
+func buildCSP(servesSPA bool, plausibleSrc string) string {
+	if !servesSPA {
+		// API-only deploy: strictest policy. The backend returns JSON
+		// and never renders HTML, so nothing legitimate needs any
+		// resources.
+		return "default-src 'none'; frame-ancestors 'none'"
+	}
+	scriptExtras := "https://js.stripe.com"
+	connectExtras := "https://api.stripe.com"
+	if plausibleSrc != "" {
+		scriptExtras += " " + plausibleSrc
+		// Plausible POSTs pageview events to the same origin as the
+		// script by default.
+		if u := plausibleOrigin(plausibleSrc); u != "" {
+			connectExtras += " " + u
+		}
+	}
+	return strings.Join([]string{
+		"default-src 'self'",
+		"script-src 'self' " + scriptExtras,
+		// Tailwind + Stripe Elements inject runtime <style> tags; we
+		// allow 'unsafe-inline' for styles only — never for scripts.
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+		"font-src 'self' https://fonts.gstatic.com",
+		"img-src 'self' data: https:",
+		"connect-src 'self' " + connectExtras,
+		"frame-src https://js.stripe.com https://hooks.stripe.com",
+		"frame-ancestors 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+	}, "; ")
+}
+
+// plausibleOrigin extracts the scheme://host portion of a Plausible
+// script URL so we can add it to connect-src.
+func plausibleOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Accept full URLs only; silently ignore relative/garbled values.
+	for _, scheme := range []string{"https://", "http://"} {
+		if !strings.HasPrefix(raw, scheme) {
+			continue
+		}
+		rest := raw[len(scheme):]
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			rest = rest[:i]
+		}
+		if rest == "" {
+			return ""
+		}
+		return scheme + rest
+	}
+	return ""
+}
+
+func withSecurityHeaders(csp string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -260,7 +322,26 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", csp)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRecovery catches panics in downstream handlers, logs them with
+// the request path and writes a sanitized 500 JSON response. The stack
+// trace never reaches the client; it is only emitted to stderr for
+// operators to triage.
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic: method=%s path=%s err=%v", r.Method, r.URL.Path, rec)
+				// Don't try to write if headers already sent.
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"internal error"}`))
+			}
+		}()
 		next.ServeHTTP(w, r)
 	})
 }
@@ -305,11 +386,56 @@ func withBodyLimit(limit int64, next http.Handler) http.Handler {
 	})
 }
 
+// statusRecorder wraps http.ResponseWriter to capture the outbound status
+// code and response byte count for structured access logs.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	n, err := s.ResponseWriter.Write(b)
+	s.bytes += n
+	return n, err
+}
+
+// withLogging emits one structured JSON line per request on stdout.
+// Fields are stable and cheap to parse from log aggregators (Fly logs,
+// Loki, Datadog). We deliberately omit query strings and bodies to keep
+// PII out of the stream.
 func withLogging(trustedProxies []*net.IPNet, next http.Handler) http.Handler {
+	enc := json.NewEncoder(os.Stdout)
+	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s %s", clientIP(r, trustedProxies), r.Method, r.URL.Path, time.Since(start))
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+		entry := map[string]any{
+			"t":        start.UTC().Format(time.RFC3339Nano),
+			"level":    "info",
+			"msg":      "http",
+			"method":   r.Method,
+			"path":     r.URL.Path,
+			"status":   rec.status,
+			"bytes":    rec.bytes,
+			"duration": time.Since(start).Milliseconds(),
+			"ip":       clientIP(r, trustedProxies),
+		}
+		if ref := r.Header.Get("Referer"); ref != "" {
+			entry["referer"] = ref
+		}
+		mu.Lock()
+		_ = enc.Encode(entry)
+		mu.Unlock()
 	})
 }
 
@@ -387,45 +513,52 @@ func safeString(s string, max int) (string, bool) {
 
 // ----- Handlers -----
 
-func handleProducts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	out := catalog
-	if category != "" {
-		out = make([]Product, 0, len(catalog))
-		for _, p := range catalog {
-			if strings.EqualFold(p.Category, category) {
-				out = append(out, p)
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func handleProductByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/products/")
-	if id == "" || strings.Contains(id, "/") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
-		return
-	}
-	for _, p := range catalog {
-		// Constant-time compare to make ID probing uniform in timing.
-		if subtle.ConstantTimeCompare([]byte(p.ID), []byte(id)) == 1 {
-			writeJSON(w, http.StatusOK, p)
+func handleProducts(store *productsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		list, err := store.listPublic(ctx, strings.TrimSpace(r.URL.Query().Get("category")))
+		if err != nil {
+			log.Printf("products list: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog unavailable"})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
 	}
-	writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
 }
 
-func handleCheckout(orders *orderStore, tokenKey []byte) http.HandlerFunc {
+func handleProductByID(store *productsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/api/products/")
+		if id == "" || strings.Contains(id, "/") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		p, err := store.get(ctx, id)
+		if errors.Is(err, errProductNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
+			return
+		}
+		if err != nil {
+			log.Printf("product get: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	}
+}
+
+func handleCheckout(orders *orderStore, products *productsStore, tokenKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -477,28 +610,26 @@ func handleCheckout(orders *orderStore, tokenKey []byte) http.HandlerFunc {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
 				return
 			}
-			var unit int
-			var prodName string
-			found := false
-			for _, p := range catalog {
-				if p.ID == it.ProductID {
-					unit = p.PriceCents
-					if payment == "pix" {
-						unit = p.PixPriceCents
-					}
-					prodName = p.Name
-					found = true
-					break
-				}
-			}
-			if !found {
+			ctxP, cancelP := context.WithTimeout(r.Context(), 2*time.Second)
+			p, err := products.get(ctxP, it.ProductID)
+			cancelP()
+			if errors.Is(err, errProductNotFound) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
 				return
+			}
+			if err != nil {
+				log.Printf("checkout: product lookup: %v", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog unavailable"})
+				return
+			}
+			unit := p.PriceCents
+			if payment == "pix" {
+				unit = p.PixPriceCents
 			}
 			total += unit * it.Quantity
 			items = append(items, orderItem{
 				ProductID:      it.ProductID,
-				ProductName:    prodName,
+				ProductName:    p.Name,
 				Size:           it.Size,
 				Color:          it.Color,
 				Quantity:       it.Quantity,
@@ -659,6 +790,13 @@ func main() {
 	}
 	defer db.Close()
 	orders := newOrderStore(db)
+	products := newProductsStore(db)
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := seedProductsIfEmpty(seedCtx, products, catalog); err != nil {
+		log.Printf("product seed: %v", err)
+	}
+	seedCancel()
+	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	log.Printf("SQLite ready (path=%s)", mapNonEmpty(dbPath, dbPath, defaultDBPath))
 
 	tokenKey := orderTokenSecret()
@@ -680,6 +818,7 @@ func main() {
 
 	webhookDeps := webhookDeps{
 		Orders:   orders,
+		Products: products,
 		LabelJob: labelWrk,
 		EmailJob: emailWrk,
 		AppURL:   appURL,
@@ -688,22 +827,29 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
-	mux.HandleFunc("/api/products", handleProducts)
-	mux.HandleFunc("/api/products/", handleProductByID)
-	mux.HandleFunc("/api/checkout", handleCheckout(orders, tokenKey))
+	mux.HandleFunc("/api/products", handleProducts(products))
+	mux.HandleFunc("/api/products/", handleProductByID(products))
+	mux.HandleFunc("/api/checkout", handleCheckout(orders, products, tokenKey))
 	mux.HandleFunc("/api/orders/", handleOrderLookup(orders, tokenKey))
 	mux.HandleFunc("/api/payments/intent", handlePaymentsIntent(stripeCli, orders))
 	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, webhookDeps))
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
-	mux.HandleFunc("/", staticOrNotFound(strings.TrimSpace(os.Getenv("STATIC_DIR"))))
+	mux.HandleFunc("/api/admin/products", adminAuth(adminToken, handleAdminProducts(products)))
+	mux.HandleFunc("/api/admin/products/", adminAuth(adminToken, handleAdminProductByID(products)))
+	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
+	mux.HandleFunc("/", staticOrNotFound(staticDir))
+
+	plausibleSrc := strings.TrimSpace(os.Getenv("PLAUSIBLE_SCRIPT_SRC"))
+	csp := buildCSP(staticDir != "", plausibleSrc)
 
 	var h http.Handler = mux
 	h = withBodyLimit(1<<16, h) // 64KiB
 	h = withRateLimit(rl, trustedProxies, h)
 	h = withCORS(allowedOriginsFromEnv(), h)
-	h = withSecurityHeaders(h)
+	h = withSecurityHeaders(csp, h)
+	h = withRecovery(h)
 	h = withLogging(trustedProxies, h)
 
 	srv := &http.Server{
