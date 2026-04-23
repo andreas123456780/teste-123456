@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import type { CartItem } from "../types";
 import { api, type ShippingOption } from "../api";
 import { formatBRL } from "../utils/format";
-import { Close, Minus, Plus, Lock } from "./icons";
+import { Close, Minus, Plus, Lock, WhatsApp } from "./icons";
 import { ProductArt } from "./ProductArt";
 import { ShippingQuote } from "./ShippingQuote";
 import { StripePaymentStep } from "./StripePaymentStep";
@@ -15,11 +15,54 @@ type Props = {
   onUpdateQty: (id: string, size: string, color: string, qty: number) => void;
   onRemove: (id: string, size: string, color: string) => void;
   onClear: () => void;
+  whatsAppNumber: string;
 };
+
+// Pix via Stripe is not universally enabled (BR-only, needs CNPJ review
+// in the Stripe dashboard). Until it is, we route Pix checkouts through
+// WhatsApp: the order is still persisted on the backend so we keep the
+// audit trail + stock reservation, but the customer finishes payment by
+// chat with the operator, who manually sends the Pix QR code and later
+// marks the order as paid in /admin.
+function buildPixWhatsAppLink(opts: {
+  phone: string;
+  orderId: string;
+  amountCents: number;
+  items: CartItem[];
+  name: string;
+  zipCode: string;
+  address: string;
+}): string {
+  const lines = [
+    `Olá! Quero finalizar meu pedido NAST #${opts.orderId} via Pix.`,
+    "",
+    "*Itens:*",
+    ...opts.items.map(
+      (it) =>
+        `• ${it.quantity}× ${it.product.name} (${it.size} · ${it.color})`,
+    ),
+    "",
+    `*Total:* ${formatBRL(opts.amountCents)}`,
+    `*Nome:* ${opts.name}`,
+    `*CEP:* ${opts.zipCode}`,
+    `*Endereço:* ${opts.address}`,
+    "",
+    "Por favor, me envie a chave Pix ou o QR Code.",
+  ];
+  return `https://wa.me/${opts.phone}?text=${encodeURIComponent(lines.join("\n"))}`;
+}
 
 type FormState = { name: string; email: string; address: string; zipCode: string };
 
-export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: Props) {
+export function Cart({
+  open,
+  items,
+  onClose,
+  onUpdateQty,
+  onRemove,
+  onClear,
+  whatsAppNumber,
+}: Props) {
   const [form, setForm] = useState<FormState>({
     name: "",
     email: "",
@@ -27,7 +70,13 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     zipCode: "",
   });
   const [loading, setLoading] = useState(false);
-  const [order, setOrder] = useState<{ id: string; total: number; token: string } | null>(null);
+  const [order, setOrder] = useState<{
+    id: string;
+    total: number;
+    token: string;
+    method: "pix" | "card";
+    whatsAppHref?: string;
+  } | null>(null);
   const [payment, setPayment] = useState<
     | {
         clientSecret: string;
@@ -87,6 +136,31 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
             }
           : undefined,
       });
+      if (method === "pix") {
+        const waHref = buildPixWhatsAppLink({
+          phone: whatsAppNumber,
+          orderId: checkoutRes.orderId,
+          amountCents: checkoutRes.amountCents,
+          items,
+          name: form.name,
+          zipCode: form.zipCode,
+          address: form.address,
+        });
+        // Open WhatsApp in a new tab first (user gesture is still in
+        // scope inside a submit handler), then reveal the confirmation
+        // screen in case the popup is blocked or the user returns.
+        window.open(waHref, "_blank", "noopener,noreferrer");
+        setOrder({
+          id: checkoutRes.orderId,
+          total: checkoutRes.amountCents,
+          token: checkoutRes.orderToken,
+          method: "pix",
+          whatsAppHref: waHref,
+        });
+        setShipping(null);
+        onClear();
+        return;
+      }
       const intent = await api.createPaymentIntent(checkoutRes.orderId);
       setPayment({
         clientSecret: intent.clientSecret,
@@ -112,6 +186,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
       id: payment.orderId,
       total: payment.amountCents,
       token: payment.orderToken,
+      method: payment.method,
     });
     setPayment(null);
     setShipping(null);
@@ -192,7 +267,9 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                     </svg>
                   </motion.div>
                   <h3 className="mt-6 text-2xl font-black text-white">
-                    Pedido confirmado!
+                    {order.method === "pix"
+                      ? "Pedido reservado!"
+                      : "Pedido confirmado!"}
                   </h3>
                   <p className="mt-2 text-sm text-white/60">
                     Código:{" "}
@@ -204,10 +281,28 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                       {formatBRL(order.total)}
                     </span>
                   </p>
+                  {order.method === "pix" && (
+                    <p className="mt-4 max-w-xs text-xs text-white/70">
+                      Abrimos o WhatsApp pra você finalizar o Pix com o
+                      atendimento. Se a janela não abrir, clique no botão
+                      abaixo.
+                    </p>
+                  )}
+                  {order.method === "pix" && order.whatsAppHref && (
+                    <a
+                      href={order.whatsAppHref}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="mt-6 inline-flex items-center gap-2 bg-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-black hover:bg-white"
+                    >
+                      <WhatsApp className="h-4 w-4" />
+                      Pagar no WhatsApp
+                    </a>
+                  )}
                   {order.token && (
                     <a
                       href={`/pedido/${order.token}`}
-                      className="mt-8 border border-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-black"
+                      className="mt-4 border border-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-black"
                     >
                       Acompanhar pedido
                     </a>
@@ -352,7 +447,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                             />
                           )}
                           <span className="relative">
-                            {m === "pix" ? "pix -5%" : "cartão"}
+                            {m === "pix" ? "pix (zap) -5%" : "cartão"}
                           </span>
                         </button>
                       );

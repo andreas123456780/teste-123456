@@ -20,9 +20,10 @@ import { WhatsAppButton } from "./components/WhatsAppButton";
 import { OrderStatus } from "./pages/OrderStatus";
 import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
+import { Returns } from "./pages/Returns";
 import { AdminPage } from "./pages/Admin";
 
-const WHATSAPP_NUMBER = "5511994281802";
+const WHATSAPP_NUMBER = "5511910859392";
 const SUPPORT_EMAIL = "contato@nast.com.br";
 
 // Minimal route matcher. We avoid react-router to keep the bundle lean;
@@ -35,6 +36,7 @@ type Route =
   | { kind: "order"; token: string }
   | { kind: "privacy" }
   | { kind: "terms" }
+  | { kind: "returns" }
   | { kind: "admin" };
 
 function parseRoute(pathname: string): Route {
@@ -45,6 +47,9 @@ function parseRoute(pathname: string): Route {
   }
   if (pathname === "/termos" || pathname === "/termos/") {
     return { kind: "terms" };
+  }
+  if (pathname === "/trocas" || pathname === "/trocas/") {
+    return { kind: "returns" };
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { kind: "admin" };
@@ -85,6 +90,11 @@ function App() {
   if (route.kind === "terms") {
     return (
       <Terms whatsAppNumber={WHATSAPP_NUMBER} supportEmail={SUPPORT_EMAIL} />
+    );
+  }
+  if (route.kind === "returns") {
+    return (
+      <Returns whatsAppNumber={WHATSAPP_NUMBER} supportEmail={SUPPORT_EMAIL} />
     );
   }
   if (route.kind === "admin") {
@@ -210,6 +220,7 @@ function Home() {
         onUpdateQty={updateQty}
         onRemove={removeItem}
         onClear={clearCart}
+        whatsAppNumber={WHATSAPP_NUMBER}
       />
 
       <WhatsAppButton phone={WHATSAPP_NUMBER} />

@@ -9,9 +9,8 @@ export function Footer({ whatsAppNumber }: Props = {}) {
     <footer className="relative border-t border-white/10 bg-black/80 px-6 py-16 text-sm text-white/50">
       <div className="mx-auto grid max-w-7xl grid-cols-2 gap-10 md:grid-cols-4">
         <div>
-          <div className="flex items-center gap-3 text-white">
-            <NastLogo size={28} />
-            <span className="text-lg font-black tracking-[0.4em]">NAST</span>
+          <div className="flex items-center text-white">
+            <NastLogo size={44} spin={false} />
           </div>
           <p className="mt-4 text-xs text-white/50">
             Streetwear autoral feito no Brasil. Drops limitados e produção
@@ -34,8 +33,8 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             Ajuda
           </div>
           <ul className="space-y-2">
-            <li><a href="/termos" className="hover:text-white">Trocas e devoluções</a></li>
-            <li><a href="/termos" className="hover:text-white">Envio e rastreio</a></li>
+            <li><a href="/trocas" className="hover:text-white">Trocas e devoluções</a></li>
+            <li><a href="/trocas#envio" className="hover:text-white">Envio e rastreio</a></li>
             <li><a href="/privacidade" className="hover:text-white">Privacidade</a></li>
             <li><a href="/termos" className="hover:text-white">Termos de uso</a></li>
           </ul>

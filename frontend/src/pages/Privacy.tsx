@@ -49,7 +49,8 @@ export function Privacy({ whatsAppNumber, supportEmail }: Props) {
               "Nome completo — para emissão da etiqueta de envio.",
               "Email — para confirmação do pedido e envio do código de rastreio.",
               "Endereço e CEP — para envio e cálculo de frete.",
-              "Dados do cartão/Pix são processados DIRETAMENTE pela Stripe; NAST não armazena número de cartão.",
+              "Número de WhatsApp, apenas quando você escolhe Pix (pra fecharmos o pagamento por mensagem).",
+              "Dados do cartão são processados DIRETAMENTE pela Stripe; NAST não armazena número de cartão.",
             ]}
           />
           Também armazenamos metadados do pedido (itens, valor, status) até o
@@ -110,9 +111,10 @@ export function Privacy({ whatsAppNumber, supportEmail }: Props) {
         </Section>
 
         <Section title="7. Segurança">
-          Todos os dados trafegam sob HTTPS. O processamento de pagamento é
-          feito pela Stripe (PCI-DSS nível 1). Dados de pedido ficam em base
-          SQLite com acesso restrito ao servidor da NAST.
+          Todos os dados trafegam sob HTTPS. O processamento de pagamento via
+          cartão é feito pela Stripe (PCI-DSS nível 1). Dados de pedido ficam
+          em banco criptografado em repouso (provedor gerenciado) com acesso
+          restrito à equipe operacional da NAST.
         </Section>
 
         <Section title="8. Encarregado (DPO)">

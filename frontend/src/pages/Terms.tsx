@@ -26,10 +26,12 @@ export function Terms({ whatsAppNumber, supportEmail }: Props) {
         </Section>
 
         <Section title="2. Pagamento">
-          Os pagamentos são processados pela Stripe (cartão ou Pix). Pedidos
-          são reservados e só entram em produção após a confirmação do
-          pagamento. Pedidos não pagos dentro do prazo de expiração do Pix
-          são cancelados automaticamente.
+          Cartão é processado pela Stripe (PCI-DSS nível 1). Pix é
+          finalizado via WhatsApp com o atendimento, enquanto nossa conta
+          Stripe está em homologação para Pix automático. Pedidos são
+          reservados e só entram em produção após a confirmação do
+          pagamento. Pedidos Pix não pagos em 24 h são cancelados e o
+          estoque é liberado.
         </Section>
 
         <Section title="3. Entrega">
@@ -37,17 +39,30 @@ export function Terms({ whatsAppNumber, supportEmail }: Props) {
           começa a contar a partir da emissão da etiqueta (tipicamente 1 dia
           útil após o pagamento). Atrasos por parte dos Correios fogem ao
           nosso controle, mas estamos à disposição para auxiliar no
-          acompanhamento.
+          acompanhamento em{" "}
+          <a
+            className="underline"
+            href={`https://wa.me/${whatsAppNumber}`}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            +{whatsAppNumber}
+          </a>
+          .
         </Section>
 
         <Section title="4. Trocas e devoluções">
           Direito de arrependimento: 7 dias corridos a contar do recebimento
-          (Código de Defesa do Consumidor, art. 49). Para exercer, escreva
-          para{" "}
+          (Código de Defesa do Consumidor, art. 49). Regras completas,
+          prazos e passo a passo da solicitação estão em{" "}
+          <a className="underline" href="/trocas">
+            /trocas
+          </a>
+          . Para iniciar, escreva para{" "}
           <a className="underline" href={`mailto:${supportEmail}`}>
             {supportEmail}
           </a>
-          {" "}antes de devolver. A peça deve estar sem uso, com etiquetas e na
+          {" "}ou pelo WhatsApp. A peça deve estar sem uso, com etiquetas e na
           embalagem original.
         </Section>
 
