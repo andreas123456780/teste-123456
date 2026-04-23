@@ -1,8 +1,10 @@
 import type {
   CheckoutResponse,
+  Coupon,
   PaymentIntentResponse,
   Product,
   PublicOrder,
+  ValidateCouponResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
@@ -48,8 +50,18 @@ export const api = {
     zipCode: string;
     paymentMethod: "pix" | "card";
     shipping?: { serviceId: number; serviceName: string; priceCents: number };
+    couponCode?: string;
   }) =>
     request<CheckoutResponse>(`/api/checkout`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  validateCoupon: (payload: {
+    code: string;
+    subtotalCents: number;
+    shippingCents: number;
+  }) =>
+    request<ValidateCouponResponse>(`/api/coupons/validate`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -116,6 +128,42 @@ export const adminApi = {
   remove: (token: string, id: string) =>
     adminRequest<void>(
       `/api/admin/products/${encodeURIComponent(id)}`,
+      token,
+      { method: "DELETE" },
+    ),
+};
+
+// AdminCouponPayload mirrors the Go adminCouponPayload struct exactly.
+// Callers may omit `active` (defaults to true) and any optional date.
+export type AdminCouponPayload = {
+  code: string;
+  kind: "percent" | "amount" | "free_shipping";
+  value: number;
+  minSubtotalCents: number;
+  maxUses: number;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  active?: boolean;
+  note?: string;
+};
+
+export const adminCouponsApi = {
+  list: (token: string) =>
+    adminRequest<Coupon[]>(`/api/admin/coupons`, token),
+  create: (token: string, payload: AdminCouponPayload) =>
+    adminRequest<Coupon>(`/api/admin/coupons`, token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  update: (token: string, code: string, payload: AdminCouponPayload) =>
+    adminRequest<Coupon>(
+      `/api/admin/coupons/${encodeURIComponent(code)}`,
+      token,
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+  remove: (token: string, code: string) =>
+    adminRequest<void>(
+      `/api/admin/coupons/${encodeURIComponent(code)}`,
       token,
       { method: "DELETE" },
     ),

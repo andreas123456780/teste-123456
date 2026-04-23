@@ -114,7 +114,7 @@ func TestCheckout_ValidCard(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, prods, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -155,7 +155,7 @@ func TestCheckout_ValidPix(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, prods, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -188,7 +188,7 @@ func TestCheckout_WithShipping(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, prods, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -217,7 +217,7 @@ func TestCheckout_InvalidPaymentMethod(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, prods, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
@@ -237,7 +237,7 @@ func TestCheckout_InvalidEmail(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, prods, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}

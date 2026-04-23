@@ -90,6 +90,16 @@ export function Cart({
   const [error, setError] = useState<string | null>(null);
   const [usePix, setUsePix] = useState(true);
   const [shipping, setShipping] = useState<ShippingOption | null>(null);
+  // Coupon state. `draftCode` is what the user typed; `applied` is the
+  // server-validated result, only used once the user clicks Aplicar.
+  const [draftCode, setDraftCode] = useState("");
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [applied, setApplied] = useState<{
+    code: string;
+    itemDiscountCents: number;
+    shippingDiscountCents: number;
+  } | null>(null);
 
   const handleClose = () => {
     setOrder(null);
@@ -105,9 +115,51 @@ export function Cart({
     () => items.reduce((acc, it) => acc + it.product.pixPriceCents * it.quantity, 0),
     [items],
   );
-  const subtotal = usePix ? totalPix : totalCard;
-  const shippingCents = shipping?.priceCents ?? 0;
+  const rawSubtotal = usePix ? totalPix : totalCard;
+  const rawShippingCents = shipping?.priceCents ?? 0;
+  const itemDiscount = applied?.itemDiscountCents ?? 0;
+  const shippingDiscount = applied?.shippingDiscountCents ?? 0;
+  const subtotal = Math.max(0, rawSubtotal - itemDiscount);
+  const shippingCents = Math.max(0, rawShippingCents - shippingDiscount);
   const total = subtotal + shippingCents;
+
+  // Dropping the shipping selection or emptying the cart invalidates a
+  // previously-applied free-shipping coupon — refresh it so the user
+  // isn't silently given 0 shipping on a cart that no longer qualifies.
+  const applyCoupon = async () => {
+    setCouponError(null);
+    const code = draftCode.trim().toUpperCase();
+    if (!code) return;
+    setCouponLoading(true);
+    try {
+      const res = await api.validateCoupon({
+        code,
+        subtotalCents: rawSubtotal,
+        shippingCents: rawShippingCents,
+      });
+      setApplied({
+        code: res.coupon.code,
+        itemDiscountCents: res.discount.itemDiscountCents,
+        shippingDiscountCents: res.discount.shippingDiscountCents,
+      });
+      setDraftCode(res.coupon.code);
+    } catch (err) {
+      setApplied(null);
+      setCouponError(
+        err instanceof Error
+          ? err.message.replace(/^API \d+: /, "")
+          : "cupom inv\u00e1lido",
+      );
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const removeCoupon = () => {
+    setApplied(null);
+    setCouponError(null);
+    setDraftCode("");
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,6 +187,7 @@ export function Cart({
               priceCents: shipping.priceCents,
             }
           : undefined,
+        couponCode: applied?.code,
       });
       if (method === "pix") {
         const waHref = buildPixWhatsAppLink({
@@ -494,28 +547,94 @@ export function Cart({
                   />
                 </div>
 
+                <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
+                  <label className="eyebrow text-white/50">Cupom</label>
+                  {applied ? (
+                    <div className="flex items-center justify-between border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 px-3 py-2">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                          {applied.code}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-[0.25em] text-white/50">
+                          -{formatBRL(applied.itemDiscountCents + applied.shippingDiscountCents)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={removeCoupon}
+                        className="text-[11px] uppercase tracking-[0.25em] text-white/60 hover:text-white"
+                      >
+                        remover
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        inputMode="text"
+                        autoCapitalize="characters"
+                        placeholder="código"
+                        value={draftCode}
+                        onChange={(e) =>
+                          setDraftCode(e.target.value.toUpperCase())
+                        }
+                        className="flex-1 border border-white/15 bg-transparent px-3 py-2 text-sm font-mono uppercase tracking-widest text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyCoupon}
+                        disabled={couponLoading || !draftCode.trim()}
+                        className="border border-white/20 px-4 text-[11px] font-bold uppercase tracking-[0.25em] text-white/80 hover:border-white hover:text-white disabled:opacity-50"
+                      >
+                        {couponLoading ? "..." : "aplicar"}
+                      </button>
+                    </div>
+                  )}
+                  {couponError && (
+                    <div className="text-[11px] text-[var(--color-accent-warn)]">
+                      {couponError}
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-col gap-1 border-t border-white/10 pt-3 text-white">
                   <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-white/50">
                     <span>Subtotal</span>
                     <span className="font-mono text-white/80">
-                      {formatBRL(subtotal)}
+                      {formatBRL(rawSubtotal)}
                     </span>
                   </div>
+                  {applied && itemDiscount > 0 && (
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                      <span>Cupom</span>
+                      <span className="font-mono">
+                        -{formatBRL(itemDiscount)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-white/50">
                     <span>Frete</span>
                     <span className="font-mono text-white/80">
                       {shipping ? formatBRL(shippingCents) : "—"}
                     </span>
                   </div>
+                  {applied && shippingDiscount > 0 && (
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                      <span>Frete grátis</span>
+                      <span className="font-mono">
+                        -{formatBRL(shippingDiscount)}
+                      </span>
+                    </div>
+                  )}
                   <div className="mt-1 flex items-center justify-between">
                     <div className="eyebrow text-white/60">Total</div>
                     <div className="text-right">
-                      <div className="text-xl font-black">
+                      <div className="text-xl font-black text-white">
                         {formatBRL(total)}
                       </div>
                       {usePix && totalCard > totalPix && (
                         <div className="text-[11px] text-white/40 line-through">
-                          {formatBRL(totalCard + shippingCents)}
+                          {formatBRL(totalCard + rawShippingCents)}
                         </div>
                       )}
                     </div>
