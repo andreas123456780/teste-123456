@@ -11,12 +11,7 @@ export function LoadingScreen({ show }: { show: boolean }) {
           transition={{ duration: 0.6 }}
           className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[var(--color-bg)]"
         >
-          <motion.div
-            animate={{ rotate: [0, 0, 180, 180, 360] }}
-            transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-          >
-            <NastLogo size={64} />
-          </motion.div>
+          <NastLogo size={84} />
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
