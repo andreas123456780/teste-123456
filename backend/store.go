@@ -80,13 +80,13 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO orders(
+	_, err = tx.ExecContext(ctx, rb(`INSERT INTO orders(
 		id, name, email, address, zip, payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
 		o.ID, o.Name, o.Email, o.Address, o.Zip, o.PaymentMethod, o.Status,
 		o.TotalCents, o.ShippingCents, o.AmountCents,
 		nullableInt(o.ShippingSvcID), nullableStr(o.ShippingSvcName),
@@ -99,9 +99,9 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 	}
 
 	for i, it := range o.Items {
-		_, err = tx.ExecContext(ctx, `INSERT INTO order_items(
+		_, err = tx.ExecContext(ctx, rb(`INSERT INTO order_items(
 			order_id, line_no, product_id, product_name, size, color, quantity, unit_price_cents
-		) VALUES (?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?)`),
 			o.ID, i+1, it.ProductID, it.ProductName,
 			nullableStr(it.Size), nullableStr(it.Color),
 			it.Quantity, it.UnitPriceCents,
@@ -119,13 +119,13 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 // get loads an order (with items) by id. Returns (nil, false, nil) if
 // not found so callers don't need to distinguish ErrNoRows.
 func (s *orderStore) get(ctx context.Context, id string) (*pendingOrder, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT
+	row := s.db.QueryRowContext(ctx, rb(`SELECT
 		id, name, email, address, zip, payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		created_at, updated_at
-	FROM orders WHERE id = ?`, id)
+	FROM orders WHERE id = ?`), id)
 	o, err := scanOrder(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -144,13 +144,13 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 	if piID == "" {
 		return nil, false, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT
+	row := s.db.QueryRowContext(ctx, rb(`SELECT
 		id, name, email, address, zip, payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		created_at, updated_at
-	FROM orders WHERE payment_intent_id = ? LIMIT 1`, piID)
+	FROM orders WHERE payment_intent_id = ? LIMIT 1`), piID)
 	o, err := scanOrder(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -167,7 +167,7 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 // setPaymentIntent attaches a PaymentIntent id to an existing order.
 func (s *orderStore) setPaymentIntent(ctx context.Context, orderID, piID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE orders SET payment_intent_id = ?, updated_at = ? WHERE id = ?`,
+		rb(`UPDATE orders SET payment_intent_id = ?, updated_at = ? WHERE id = ?`),
 		piID, time.Now().UTC(), orderID,
 	)
 	if err != nil {
@@ -181,7 +181,7 @@ func (s *orderStore) setPaymentIntent(ctx context.Context, orderID, piID string)
 // "shipped" when the label is cut.
 func (s *orderStore) setStatus(ctx context.Context, orderID, status string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE orders SET status = ?, updated_at = ? WHERE id = ?`,
+		rb(`UPDATE orders SET status = ?, updated_at = ? WHERE id = ?`),
 		status, time.Now().UTC(), orderID,
 	)
 	if err != nil {
@@ -193,9 +193,9 @@ func (s *orderStore) setStatus(ctx context.Context, orderID, status string) erro
 // setTracking persists the SuperFrete-generated tracking metadata for an
 // order. Called from the webhook after a successful label generation.
 func (s *orderStore) setTracking(ctx context.Context, orderID, code, url, labelURL, superfreteID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE orders SET
+	_, err := s.db.ExecContext(ctx, rb(`UPDATE orders SET
 		tracking_code = ?, tracking_url = ?, label_url = ?, superfrete_order_id = ?, updated_at = ?
-		WHERE id = ?`,
+		WHERE id = ?`),
 		nullableStr(code), nullableStr(url), nullableStr(labelURL),
 		nullableStr(superfreteID), time.Now().UTC(), orderID,
 	)
@@ -220,9 +220,9 @@ func (s *orderStore) recordEvent(ctx context.Context, orderID, eventType, piID s
 			raw = string(b)
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO payment_events(
+	_, err := s.db.ExecContext(ctx, rb(`INSERT INTO payment_events(
 		order_id, event_type, payment_intent_id, raw_payload, created_at
-	) VALUES (?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?)`),
 		nullableStr(orderID), eventType, nullableStr(piID),
 		nullableStr(raw), time.Now().UTC(),
 	)
@@ -233,9 +233,9 @@ func (s *orderStore) recordEvent(ctx context.Context, orderID, eventType, piID s
 }
 
 func (s *orderStore) loadItems(ctx context.Context, o *pendingOrder) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT
+	rows, err := s.db.QueryContext(ctx, rb(`SELECT
 		line_no, product_id, product_name, size, color, quantity, unit_price_cents
-	FROM order_items WHERE order_id = ? ORDER BY line_no`, o.ID)
+	FROM order_items WHERE order_id = ? ORDER BY line_no`), o.ID)
 	if err != nil {
 		return fmt.Errorf("query items: %w", err)
 	}

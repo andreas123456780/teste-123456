@@ -40,7 +40,7 @@ func (s *productsStore) listPublic(ctx context.Context, category string) ([]Prod
 		q = baseQ + " AND LOWER(category) = LOWER(?) ORDER BY sort_order ASC, id ASC"
 		args = append(args, category)
 	}
-	return s.query(ctx, q, args...)
+	return s.query(ctx, rb(q), args...)
 }
 
 // listAdmin returns every product, hidden or not. Admin only.
@@ -48,13 +48,13 @@ func (s *productsStore) listAdmin(ctx context.Context) ([]Product, error) {
 	const q = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
 		colors_json, sizes_json, tags_json, stock
 		FROM products ORDER BY sort_order ASC, id ASC`
-	return s.query(ctx, q)
+	return s.query(ctx, rb(q))
 }
 
 func (s *productsStore) get(ctx context.Context, id string) (*Product, error) {
 	const q = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
 		colors_json, sizes_json, tags_json, stock FROM products WHERE id = ?`
-	row := s.db.QueryRowContext(ctx, q, id)
+	row := s.db.QueryRowContext(ctx, rb(q), id)
 	p, err := scanProduct(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errProductNotFound
@@ -86,7 +86,7 @@ func (s *productsStore) upsert(ctx context.Context, p *Product, hidden bool, sor
 			hidden = excluded.hidden,
 			sort_order = excluded.sort_order,
 			updated_at = excluded.updated_at`
-	_, err := s.db.ExecContext(ctx, q,
+	_, err := s.db.ExecContext(ctx, rb(q),
 		p.ID, p.Name, p.Description, p.PriceCents, p.PixPriceCents, p.Category,
 		p.Image, p.BackImage, string(colors), string(sizes), string(tags),
 		p.Stock, boolToInt(hidden), sortOrder, now, now,
@@ -98,7 +98,7 @@ func (s *productsStore) upsert(ctx context.Context, p *Product, hidden bool, sor
 }
 
 func (s *productsStore) delete(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM products WHERE id = ?`, id)
+	res, err := s.db.ExecContext(ctx, rb(`DELETE FROM products WHERE id = ?`), id)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (s *productsStore) decrementStock(ctx context.Context, id string, qty int) 
 	}
 	defer func() { _ = tx.Rollback() }()
 	var stock int
-	row := tx.QueryRowContext(ctx, `SELECT stock FROM products WHERE id = ?`, id)
+	row := tx.QueryRowContext(ctx, rb(`SELECT stock FROM products WHERE id = ?`), id)
 	if err := row.Scan(&stock); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return qty, nil
@@ -136,7 +136,7 @@ func (s *productsStore) decrementStock(ctx context.Context, id string, qty int) 
 		applied = stock
 	}
 	if applied > 0 {
-		if _, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?`,
+		if _, err := tx.ExecContext(ctx, rb(`UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?`),
 			applied, time.Now().UTC().Format(time.RFC3339), id); err != nil {
 			return qty, err
 		}
