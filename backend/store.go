@@ -40,6 +40,8 @@ type pendingOrder struct {
 	TrackingURL     string
 	LabelURL        string
 	SuperfreteID    string
+	CouponCode      string
+	DiscountCents   int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Items           []orderItem
@@ -85,13 +87,15 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents,
 		created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
 		o.ID, o.Name, o.Email, o.Address, o.Zip, o.PaymentMethod, o.Status,
 		o.TotalCents, o.ShippingCents, o.AmountCents,
 		nullableInt(o.ShippingSvcID), nullableStr(o.ShippingSvcName),
 		nullableStr(o.PaymentIntentID), nullableStr(o.TrackingCode),
 		nullableStr(o.TrackingURL), nullableStr(o.LabelURL), nullableStr(o.SuperfreteID),
+		nullableStr(o.CouponCode), o.DiscountCents,
 		o.CreatedAt, o.UpdatedAt,
 	)
 	if err != nil {
@@ -124,6 +128,7 @@ func (s *orderStore) get(ctx context.Context, id string) (*pendingOrder, bool, e
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents,
 		created_at, updated_at
 	FROM orders WHERE id = ?`), id)
 	o, err := scanOrder(row)
@@ -149,6 +154,7 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents,
 		created_at, updated_at
 	FROM orders WHERE payment_intent_id = ? LIMIT 1`), piID)
 	o, err := scanOrder(row)
@@ -258,13 +264,14 @@ func (s *orderStore) loadItems(ctx context.Context, o *pendingOrder) error {
 func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	var o pendingOrder
 	var shipID sql.NullInt64
-	var shipName, piID, code, url, labelURL, supID sql.NullString
+	var shipName, piID, code, url, labelURL, supID, couponCode sql.NullString
 	err := row.Scan(
 		&o.ID, &o.Name, &o.Email, &o.Address, &o.Zip,
 		&o.PaymentMethod, &o.Status,
 		&o.TotalCents, &o.ShippingCents, &o.AmountCents,
 		&shipID, &shipName,
 		&piID, &code, &url, &labelURL, &supID,
+		&couponCode, &o.DiscountCents,
 		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
@@ -279,6 +286,7 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	o.TrackingURL = url.String
 	o.LabelURL = labelURL.String
 	o.SuperfreteID = supID.String
+	o.CouponCode = couponCode.String
 	return &o, nil
 }
 

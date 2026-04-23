@@ -55,13 +55,14 @@ type CartItem struct {
 }
 
 type CheckoutRequest struct {
-	Items         []CartItem      `json:"items"`
-	Name          string          `json:"name"`
-	Email         string          `json:"email"`
-	Address       string          `json:"address"`
-	ZipCode       string          `json:"zipCode"`
-	PaymentMethod string          `json:"paymentMethod"`
+	Items         []CartItem        `json:"items"`
+	Name          string            `json:"name"`
+	Email         string            `json:"email"`
+	Address       string            `json:"address"`
+	ZipCode       string            `json:"zipCode"`
+	PaymentMethod string            `json:"paymentMethod"`
 	Shipping      *CheckoutShipping `json:"shipping,omitempty"`
+	CouponCode    string            `json:"couponCode,omitempty"`
 }
 
 // CheckoutShipping is optional and carries the SuperFrete quote the user
@@ -85,6 +86,8 @@ type CheckoutResponse struct {
 	TotalCents    int    `json:"totalCents"`
 	ShippingCents int    `json:"shippingCents"`
 	AmountCents   int    `json:"amountCents"`
+	DiscountCents int    `json:"discountCents,omitempty"`
+	CouponCode    string `json:"couponCode,omitempty"`
 	Status        string `json:"status"`
 	CreatedAt     string `json:"createdAt"`
 	PaymentMethod string `json:"paymentMethod"`
@@ -614,7 +617,7 @@ func handleProductByID(store *productsStore) http.HandlerFunc {
 	}
 }
 
-func handleCheckout(orders *orderStore, products *productsStore, tokenKey []byte) http.HandlerFunc {
+func handleCheckout(orders *orderStore, products *productsStore, coupons *couponsStore, tokenKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -706,20 +709,61 @@ func handleCheckout(orders *orderStore, products *productsStore, tokenKey []byte
 			shippingCents = req.Shipping.PriceCents
 			shipServiceID = req.Shipping.ServiceID
 		}
-		amount := total + shippingCents
+		// Coupon (optional). Re-validate server-side even when the cart
+		// already previewed the discount via /api/coupons/validate — we
+		// trust nothing the browser sent.
+		finalSubtotal := total
+		finalShipping := shippingCents
+		appliedCode := ""
+		discountCents := 0
+		if strings.TrimSpace(req.CouponCode) != "" {
+			code := normalizeCouponCode(req.CouponCode)
+			if code == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cupom inválido"})
+				return
+			}
+			ctxC, cancelC := context.WithTimeout(r.Context(), 2*time.Second)
+			c, errC := coupons.get(ctxC, code)
+			cancelC()
+			if errors.Is(errC, errCouponNotFound) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cupom não encontrado"})
+				return
+			}
+			if errC != nil {
+				log.Printf("checkout: coupon lookup: %v", errC)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "coupon unavailable"})
+				return
+			}
+			if errE := couponEligibility(c, time.Now().UTC()); errE != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": errE.Error()})
+				return
+			}
+			summary, errA := applyCoupon(c, total, shippingCents)
+			if errA != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": errA.Error()})
+				return
+			}
+			finalSubtotal = summary.NewSubtotalCents
+			finalShipping = summary.NewShippingCents
+			appliedCode = c.Code
+			discountCents = summary.TotalDiscountCents
+		}
+		amount := finalSubtotal + finalShipping
 		order := &pendingOrder{
 			ID:              randomID("ord_"),
 			Name:            name,
 			Email:           email,
 			Address:         address,
 			Zip:             zip,
-			TotalCents:      total,
-			ShippingCents:   shippingCents,
+			TotalCents:      finalSubtotal,
+			ShippingCents:   finalShipping,
 			AmountCents:     amount,
 			ShippingSvcID:   shipServiceID,
 			ShippingSvcName: shipServiceName,
 			PaymentMethod:   payment,
 			Status:          "pending_payment",
+			CouponCode:      appliedCode,
+			DiscountCents:   discountCents,
 			CreatedAt:       time.Now().UTC(),
 			Items:           items,
 		}
@@ -730,18 +774,30 @@ func handleCheckout(orders *orderStore, products *productsStore, tokenKey []byte
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save order"})
 			return
 		}
+		if appliedCode != "" {
+			// Best-effort bump. A race here at the last use slot is
+			// acceptable — max_uses is a soft budget and the admin can
+			// deactivate the coupon if overshot.
+			incCtx, cancelInc := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _ = coupons.db.ExecContext(incCtx,
+				rb(`UPDATE coupons SET used_count = used_count + 1, updated_at = ? WHERE code = ?`),
+				time.Now().UTC(), appliedCode)
+			cancelInc()
+		}
 		token := ""
 		if len(tokenKey) > 0 {
 			token = makeOrderToken(tokenKey, order.ID, time.Now())
 		}
-		log.Printf("checkout: order=%s items=%d total=%d shipping=%d payment=%s zip=%s",
-			order.ID, len(order.Items), total, shippingCents, payment, zip)
+		log.Printf("checkout: order=%s items=%d total=%d shipping=%d payment=%s zip=%s coupon=%s discount=%d",
+			order.ID, len(order.Items), finalSubtotal, finalShipping, payment, zip, appliedCode, discountCents)
 		writeJSON(w, http.StatusOK, CheckoutResponse{
 			OrderID:       order.ID,
 			OrderToken:    token,
-			TotalCents:    total,
-			ShippingCents: shippingCents,
+			TotalCents:    finalSubtotal,
+			ShippingCents: finalShipping,
 			AmountCents:   amount,
+			DiscountCents: discountCents,
+			CouponCode:    appliedCode,
 			Status:        order.Status,
 			CreatedAt:     order.CreatedAt.Format(time.RFC3339),
 			PaymentMethod: payment,
@@ -876,7 +932,9 @@ func main() {
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/products", handleProducts(products))
 	mux.HandleFunc("/api/products/", handleProductByID(products))
-	mux.HandleFunc("/api/checkout", handleCheckout(orders, products, tokenKey))
+	coupons := newCouponsStore(db)
+	mux.HandleFunc("/api/checkout", handleCheckout(orders, products, coupons, tokenKey))
+	mux.HandleFunc("/api/coupons/validate", handleCouponValidate(coupons))
 	mux.HandleFunc("/api/orders/", handleOrderLookup(orders, tokenKey))
 	mux.HandleFunc("/api/payments/intent", handlePaymentsIntent(stripeCli, orders))
 	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, webhookDeps))
@@ -885,6 +943,8 @@ func main() {
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
 	mux.HandleFunc("/api/admin/products", adminAuth(adminToken, handleAdminProducts(products)))
 	mux.HandleFunc("/api/admin/products/", adminAuth(adminToken, handleAdminProductByID(products)))
+	mux.HandleFunc("/api/admin/coupons", adminAuth(adminToken, handleAdminCoupons(coupons)))
+	mux.HandleFunc("/api/admin/coupons/", adminAuth(adminToken, handleAdminCouponByCode(coupons)))
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 

@@ -49,6 +49,13 @@ func newTestProducts(t *testing.T, db *sql.DB) *productsStore {
 	return store
 }
 
+// newTestCoupons returns an empty coupons store backed by the shared
+// test DB. Tests that exercise the coupon flow populate it explicitly.
+func newTestCoupons(t *testing.T, db *sql.DB) *couponsStore {
+	t.Helper()
+	return newCouponsStore(db)
+}
+
 // putTestOrder is a small helper used in several tests to create a
 // minimal pending order.
 func putTestOrder(t *testing.T, store *orderStore, id, email, method string, amount, shipping int) *pendingOrder {

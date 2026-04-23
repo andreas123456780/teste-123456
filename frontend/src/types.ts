@@ -30,6 +30,8 @@ export type CheckoutResponse = {
   totalCents: number;
   shippingCents: number;
   amountCents: number;
+  discountCents?: number;
+  couponCode?: string;
   status: string;
   createdAt: string;
   paymentMethod: "pix" | "card";
@@ -66,4 +68,43 @@ export type PaymentIntentResponse = {
   status: string;
   amountCents: number;
   method: "pix" | "card";
+};
+
+// Discount coupon, admin-side shape. The public validate endpoint
+// returns a narrower `PublicCoupon` subset that omits usedCount/note.
+export type CouponKind = "percent" | "amount" | "free_shipping";
+
+export type Coupon = {
+  code: string;
+  kind: CouponKind;
+  value: number;
+  minSubtotalCents: number;
+  maxUses: number;
+  usedCount: number;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  active: boolean;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DiscountSummary = {
+  itemDiscountCents: number;
+  shippingDiscountCents: number;
+  totalDiscountCents: number;
+  newSubtotalCents: number;
+  newShippingCents: number;
+  newAmountCents: number;
+};
+
+export type ValidateCouponResponse = {
+  coupon: {
+    code: string;
+    kind: CouponKind;
+    value: number;
+    minSubtotalCents: number;
+    expiresAt?: string | null;
+  };
+  discount: DiscountSummary;
 };
