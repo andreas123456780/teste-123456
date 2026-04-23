@@ -1,0 +1,110 @@
+# Deploying NAST to Vercel
+
+This repo ships as two Vercel projects backed by the same GitHub
+repository. Frontend is a plain Vite SPA; backend is a Go HTTP server
+deployed with Vercel's Go framework preset. Persistence lives in a
+managed Postgres database provisioned from the Vercel dashboard.
+
+Both services run on the Vercel free/Hobby plan.
+
+## Prerequisites
+
+- A Vercel account (https://vercel.com) with access to the GitHub repo.
+- A Stripe account — ideally Brazilian so you can accept Pix.
+- A SuperFrete account with a production or sandbox API token.
+- (Optional) A Resend account for confirmation emails.
+
+No other dependencies are required.
+
+## 1. Create the backend project
+
+1. https://vercel.com/new → import the GitHub repo.
+2. **Root Directory**: `backend`.
+3. **Framework Preset**: Vercel detects `go` automatically because of
+   `backend/vercel.json`. Leave it.
+4. **Environment Variables** (Production + Preview):
+
+   | Name | Required? | Value |
+   | --- | --- | --- |
+   | `STRIPE_SECRET_KEY` | yes | `sk_live_...` (or `sk_test_...`) |
+   | `STRIPE_WEBHOOK_SECRET` | yes for live | `whsec_...` (set after step 4) |
+   | `SUPERFRETE_TOKEN` | yes | your SuperFrete API token |
+   | `SUPERFRETE_ENV` | yes | `production` or `sandbox` |
+   | `SUPERFRETE_ORIGIN_ZIP` | yes | origin CEP for shipping quotes |
+   | `ADMIN_TOKEN` | yes | 32+ random bytes; used to log into `/admin` |
+   | `ALLOWED_ORIGINS` | yes | `https://<frontend-project>.vercel.app,https://*.vercel.app` |
+   | `APP_URL` | yes | frontend URL (e.g. `https://nast.vercel.app`) |
+   | `RESEND_API_KEY` | optional | `re_...` if confirmation emails are enabled |
+   | `EMAIL_FROM` | optional | `NAST <contato@nast.com.br>` |
+   | `ORDER_TOKEN_SECRET` | optional | defaults to hash of `STRIPE_SECRET_KEY` |
+
+5. **Don't deploy yet** — provision the database first so `DATABASE_URL`
+   is injected automatically on the first build.
+
+### Provisioning Postgres
+
+In the backend project: **Storage → Add Database → Postgres** (Neon-
+backed, part of Vercel Marketplace). Vercel creates a branch per
+environment (prod/preview) and injects `DATABASE_URL`,
+`POSTGRES_URL_NON_POOLING`, etc. as environment variables. The backend
+reads `DATABASE_URL` and runs migrations on every cold start.
+
+Free tier (at time of writing) gives you 256 MB storage and enough
+compute hours to operate a small storefront. Upgrade when needed.
+
+After the DB is attached, trigger a deploy. The first boot runs the
+two migrations (`migrations/postgres/0001_init.sql`,
+`migrations/postgres/0002_products.sql`) and seeds the product catalog
+from the in-memory defaults in `backend/main.go`.
+
+### Stripe webhook
+
+Once the backend is live at `https://<backend>.vercel.app`:
+
+1. https://dashboard.stripe.com/webhooks → **Add endpoint**.
+2. URL: `https://<backend>.vercel.app/api/payments/webhook`
+3. Events: `payment_intent.succeeded`, `payment_intent.payment_failed`.
+4. Save → **Reveal signing secret** → copy `whsec_...`.
+5. Paste it into the backend project's `STRIPE_WEBHOOK_SECRET` env var
+   and redeploy.
+
+Until this is set, the backend rejects all webhook payloads as a
+safety measure.
+
+## 2. Create the frontend project
+
+1. https://vercel.com/new → import the same GitHub repo.
+2. **Root Directory**: `frontend`.
+3. Framework is auto-detected as **Vite** via `frontend/vercel.json`.
+4. **Environment Variables** (Production + Preview):
+
+   | Name | Required? | Value |
+   | --- | --- | --- |
+   | `VITE_API_URL` | yes | `https://<backend>.vercel.app` |
+   | `VITE_STRIPE_PUBLISHABLE_KEY` | yes | `pk_live_...` or `pk_test_...` |
+   | `VITE_PLAUSIBLE_DOMAIN` | optional | `nast.com.br` to enable analytics |
+   | `VITE_PLAUSIBLE_SRC` | optional | custom Plausible script URL |
+
+5. Deploy.
+
+## 3. Custom domains
+
+In the frontend project: **Settings → Domains → Add `nast.com.br`**.
+Vercel provisions TLS automatically. Repeat for `api.nast.com.br` on
+the backend project (then update `VITE_API_URL` and `ALLOWED_ORIGINS`).
+
+## 4. Verifying the deploy
+
+- `GET https://<backend>.vercel.app/api/health` → `{"status":"ok"}`
+- `GET https://<backend>.vercel.app/api/products` → JSON array of the
+  seeded catalog.
+- Load the frontend; add a product to cart; get a shipping quote from
+  SuperFrete; reach Stripe Elements at checkout.
+- Log into `/admin` with `ADMIN_TOKEN`; edit a product; confirm the
+  edit is visible on the storefront without a redeploy.
+
+## Local development
+
+Nothing changes — `docker run postgres:16-alpine` works, but so does
+the default SQLite path (zero config). Run `DATABASE_URL=...` to
+switch drivers. Migrations apply to whichever database is selected.

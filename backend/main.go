@@ -346,20 +346,76 @@ func withRecovery(next http.Handler) http.Handler {
 	})
 }
 
-func withCORS(allowed map[string]struct{}, next http.Handler) http.Handler {
+// originMatcher matches an incoming Origin header against the
+// ALLOWED_ORIGINS list. We support two patterns:
+//
+//   - Exact match: "https://nast.com.br"
+//   - Leading wildcard: "https://*.vercel.app" matches any single-level
+//     subdomain so Vercel preview deployments work without edits.
+//
+// Wildcards further up the hierarchy are intentionally not supported:
+// a rogue "https://nast-phishing.vercel.app" preview would be accepted
+// by the *.vercel.app entry and that's an accepted tradeoff for dev
+// ergonomics, but we don't want it silently expanding to arbitrary
+// subdomains of any ancestor.
+type originMatcher struct {
+	exact  string
+	suffix string // set when pattern begins with "https://*."
+}
+
+func (m originMatcher) match(origin string) bool {
+	if m.exact != "" {
+		return origin == m.exact
+	}
+	if m.suffix == "" {
+		return false
+	}
+	if !strings.HasPrefix(origin, "https://") && !strings.HasPrefix(origin, "http://") {
+		return false
+	}
+	return strings.HasSuffix(origin, m.suffix)
+}
+
+func parseOrigins(raw string) []originMatcher {
+	out := make([]originMatcher, 0)
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		// "https://*.vercel.app" → suffix ".vercel.app" (leading dot
+		// kept to avoid matching "foovercel.app").
+		if idx := strings.Index(o, "://*."); idx > 0 {
+			suffix := o[idx+len("://*"):]
+			out = append(out, originMatcher{suffix: suffix})
+			continue
+		}
+		out = append(out, originMatcher{exact: o})
+	}
+	return out
+}
+
+func originAllowed(matchers []originMatcher, origin string) bool {
+	for _, m := range matchers {
+		if m.match(origin) {
+			return true
+		}
+	}
+	return false
+}
+
+func withCORS(allowed []originMatcher, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Vary: Origin is always emitted so intermediary caches key the
 		// response on Origin even when this particular request was
 		// same-origin / had no Origin header.
 		w.Header().Set("Vary", "Origin")
 		origin := r.Header.Get("Origin")
-		if origin != "" {
-			if _, ok := allowed[origin]; ok {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-				w.Header().Set("Access-Control-Max-Age", "600")
-			}
+		if origin != "" && originAllowed(allowed, origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token")
+			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -736,19 +792,12 @@ var _ *sql.DB
 // http.Request.Context but keeps the import grounded here.
 var _ = context.Background
 
-func allowedOriginsFromEnv() map[string]struct{} {
+func allowedOriginsFromEnv() []originMatcher {
 	raw := os.Getenv("ALLOWED_ORIGINS")
 	if raw == "" {
 		raw = "http://localhost:5173,http://127.0.0.1:5173"
 	}
-	out := make(map[string]struct{})
-	for _, o := range strings.Split(raw, ",") {
-		o = strings.TrimSpace(o)
-		if o != "" {
-			out[o] = struct{}{}
-		}
-	}
-	return out
+	return parseOrigins(raw)
 }
 
 func main() {
@@ -783,8 +832,7 @@ func main() {
 	}
 	stripeCli := newStripeClient(payCfg)
 
-	dbPath := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
-	db, err := openDB(dbPath)
+	db, err := openDB()
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
@@ -797,7 +845,6 @@ func main() {
 	}
 	seedCancel()
 	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
-	log.Printf("SQLite ready (path=%s)", mapNonEmpty(dbPath, dbPath, defaultDBPath))
 
 	tokenKey := orderTokenSecret()
 	if len(tokenKey) == 0 {

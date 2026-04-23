@@ -26,7 +26,8 @@ func newTestStore(t *testing.T) (*orderStore, *sql.DB, func()) {
 		t.Fatalf("open: %v", err)
 	}
 	db.SetMaxOpenConns(1) // serialize to dodge memory-sharing edge cases
-	if err := applyMigrations(db); err != nil {
+	currentDialect = dialectSQLite
+	if err := applyMigrations(db, dialectSQLite); err != nil {
 		_ = db.Close()
 		t.Fatalf("migrate: %v", err)
 	}
