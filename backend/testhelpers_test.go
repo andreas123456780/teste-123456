@@ -34,6 +34,20 @@ func newTestStore(t *testing.T) (*orderStore, *sql.DB, func()) {
 	return store, db, func() { _ = db.Close() }
 }
 
+// newTestProducts seeds an in-memory product store with the static
+// `catalog` so handler tests that read `/api/products` get realistic
+// data without coupling to the migration fixtures.
+func newTestProducts(t *testing.T, db *sql.DB) *productsStore {
+	t.Helper()
+	store := newProductsStore(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := seedProductsIfEmpty(ctx, store, catalog); err != nil {
+		t.Fatalf("seed products: %v", err)
+	}
+	return store
+}
+
 // putTestOrder is a small helper used in several tests to create a
 // minimal pending order.
 func putTestOrder(t *testing.T, store *orderStore, id, email, method string, amount, shipping int) *pendingOrder {

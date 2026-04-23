@@ -20,6 +20,7 @@ import { WhatsAppButton } from "./components/WhatsAppButton";
 import { OrderStatus } from "./pages/OrderStatus";
 import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
+import { AdminPage } from "./pages/Admin";
 
 const WHATSAPP_NUMBER = "5511994281802";
 const SUPPORT_EMAIL = "contato@nast.com.br";
@@ -33,7 +34,8 @@ type Route =
   | { kind: "home" }
   | { kind: "order"; token: string }
   | { kind: "privacy" }
-  | { kind: "terms" };
+  | { kind: "terms" }
+  | { kind: "admin" };
 
 function parseRoute(pathname: string): Route {
   const orderMatch = pathname.match(/^\/pedido\/([^/?#]+)\/?$/);
@@ -43,6 +45,9 @@ function parseRoute(pathname: string): Route {
   }
   if (pathname === "/termos" || pathname === "/termos/") {
     return { kind: "terms" };
+  }
+  if (pathname === "/admin" || pathname === "/admin/") {
+    return { kind: "admin" };
   }
   return { kind: "home" };
 }
@@ -81,6 +86,9 @@ function App() {
     return (
       <Terms whatsAppNumber={WHATSAPP_NUMBER} supportEmail={SUPPORT_EMAIL} />
     );
+  }
+  if (route.kind === "admin") {
+    return <AdminPage />;
   }
   return <Home />;
 }

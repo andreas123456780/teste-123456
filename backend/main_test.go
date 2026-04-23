@@ -69,9 +69,12 @@ func TestHealth(t *testing.T) {
 }
 
 func TestProductsList(t *testing.T) {
+	_, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/products", nil)
-	handleProducts(rr, req)
+	handleProducts(prods)(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -85,17 +88,21 @@ func TestProductsList(t *testing.T) {
 }
 
 func TestProductByID_NotFound(t *testing.T) {
+	_, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/products/does-not-exist", nil)
-	handleProductByID(rr, req)
+	handleProductByID(prods)(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
 	}
 }
 
 func TestCheckout_ValidCard(t *testing.T) {
-	orders, _, cleanup := newTestStore(t)
+	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
+	prods := newTestProducts(t, db)
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 2, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -107,7 +114,7 @@ func TestCheckout_ValidCard(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -134,8 +141,9 @@ func TestCheckout_ValidCard(t *testing.T) {
 }
 
 func TestCheckout_ValidPix(t *testing.T) {
-	orders, _, cleanup := newTestStore(t)
+	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
+	prods := newTestProducts(t, db)
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -147,7 +155,7 @@ func TestCheckout_ValidPix(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -161,8 +169,9 @@ func TestCheckout_ValidPix(t *testing.T) {
 }
 
 func TestCheckout_WithShipping(t *testing.T) {
-	orders, _, cleanup := newTestStore(t)
+	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
+	prods := newTestProducts(t, db)
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -179,7 +188,7 @@ func TestCheckout_WithShipping(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, []byte("k"))(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -194,8 +203,9 @@ func TestCheckout_WithShipping(t *testing.T) {
 }
 
 func TestCheckout_InvalidPaymentMethod(t *testing.T) {
-	orders, _, cleanup := newTestStore(t)
+	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
+	prods := newTestProducts(t, db)
 	body := CheckoutRequest{
 		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
 		Name:          "Andreas Teste",
@@ -207,15 +217,16 @@ func TestCheckout_InvalidPaymentMethod(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
 
 func TestCheckout_InvalidEmail(t *testing.T) {
-	orders, _, cleanup := newTestStore(t)
+	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
+	prods := newTestProducts(t, db)
 	body := CheckoutRequest{
 		Items:   []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1}},
 		Name:    "x",
@@ -226,7 +237,7 @@ func TestCheckout_InvalidEmail(t *testing.T) {
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
-	handleCheckout(orders, []byte("k"))(rr, req)
+	handleCheckout(orders, prods, []byte("k"))(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
