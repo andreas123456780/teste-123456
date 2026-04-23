@@ -17,6 +17,7 @@ import { LoadingScreen } from "./components/LoadingScreen";
 import { ScanIntro } from "./components/ScanIntro";
 import { shouldShowIntro } from "./lib/intro";
 import { WhatsAppButton } from "./components/WhatsAppButton";
+import { InstagramFeed } from "./components/InstagramFeed";
 import { OrderStatus } from "./pages/OrderStatus";
 import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
@@ -25,6 +26,7 @@ import { AdminPage } from "./pages/Admin";
 
 const WHATSAPP_NUMBER = "5511910859392";
 const SUPPORT_EMAIL = "contato@nast.com.br";
+const INSTAGRAM_HANDLE = "nast.oficial";
 
 // Minimal route matcher. We avoid react-router to keep the bundle lean;
 // the app only has three top-level routes plus the storefront. Each route
@@ -202,6 +204,7 @@ function Home() {
           whatsAppNumber={WHATSAPP_NUMBER}
         />
         <Story />
+        <InstagramFeed handle={INSTAGRAM_HANDLE} />
         <Newsletter />
       </main>
 

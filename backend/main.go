@@ -948,6 +948,11 @@ func main() {
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
+	igClient := newInstagramClient()
+	if !igClient.configured() {
+		log.Printf("instagram: INSTAGRAM_ACCESS_TOKEN + INSTAGRAM_USER_ID not set — feed widget will be hidden")
+	}
+	mux.HandleFunc("/api/social/instagram", handleInstagramFeed(igClient))
 	mux.HandleFunc("/api/admin/login", handleAdminLogin(adminCfg))
 	mux.HandleFunc("/api/admin/products", adminAuthFromCfg(adminCfg, handleAdminProducts(products)))
 	mux.HandleFunc("/api/admin/products/", adminAuthFromCfg(adminCfg, handleAdminProductByID(products)))
