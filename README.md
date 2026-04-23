@@ -3,10 +3,15 @@
 Site da marca **NAST**. Peças limitadas, estética minimalista e acabamento
 premium. Este repositório contém o frontend animado + o backend em Go.
 
-- **Backend:** Go 1.23, apenas stdlib, hardening embutido (security headers,
-  CORS por allowlist, rate limit por IP, validação e limites de body).
+- **Backend:** Go 1.25, apenas stdlib + `modernc.org/sqlite` (SQLite puro
+  Go), hardening embutido (security headers, CORS por allowlist, rate
+  limit por IP, validação e limites de body, persistência em SQLite com
+  migrations, workers assíncronos para etiqueta SuperFrete + e-mail
+  transacional Resend).
 - **Frontend:** React 19 + Vite + TypeScript, Tailwind v4, Framer Motion,
-  fotos reais dos produtos e tabela de medidas lateral.
+  fotos reais dos produtos e tabela de medidas lateral, página pública
+  `/pedido/:token` para acompanhamento e páginas legais (privacidade,
+  termos, banner de cookies LGPD).
 
 ## Estrutura
 
@@ -35,32 +40,60 @@ Variáveis úteis:
   de Cloudflare + um balanceador interno:
   `TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,173.245.48.0/20`
 
-### Melhor Envio (frete)
+### SuperFrete (frete)
 
-As rotas `/api/shipping/*` integram com a API oficial da Melhor Envio
-(sandbox por padrão). Defina as variáveis abaixo para ativar:
+As rotas `/api/shipping/*` integram com a [API da
+SuperFrete](https://superfrete.readme.io) (sandbox por padrão). Defina as
+variáveis abaixo para ativar:
 
 | Variável | Obrigatória | Exemplo |
 |---|---|---|
-| `MELHOR_ENVIO_ENV` | opcional | `sandbox` (padrão) ou `production` |
-| `MELHOR_ENVIO_ACCESS_TOKEN_SANDBOX` | sim (sandbox) | JWT criado em https://sandbox.melhorenvio.com.br/painel/gerenciar/tokens |
-| `MELHOR_ENVIO_ACCESS_TOKEN` | sim (produção) | JWT criado em https://melhorenvio.com.br/painel/gerenciar/tokens |
-| `MELHOR_ENVIO_ORIGIN_ZIP` | sim | CEP de origem (só dígitos, ex: `01310100`) |
-| `MELHOR_ENVIO_USER_AGENT` | recomendado | `NAST Streetwear (contato@seu-dominio.com)` — a ME rejeita chamadas sem UA válido |
+| `SUPERFRETE_ENV` | opcional | `sandbox` (padrão) ou `production` |
+| `SUPERFRETE_TOKEN` | sim | Bearer gerado em `https://sandbox.superfrete.com/#/integrations` (ou `web.superfrete.com` em produção) |
+| `SUPERFRETE_ORIGIN_ZIP` | sim | CEP de origem (só dígitos, ex: `08503000`) |
+| `SUPERFRETE_USER_AGENT` | recomendado | `NAST Streetwear (contato@seu-dominio.com)` — SuperFrete exige UA com contato |
 | `ADMIN_TOKEN` | sim p/ etiqueta+rastreio | token secreto que o admin envia no header `X-Admin-Token` |
-
-Escopos mínimos do token: `shipping-calculate`, `shipping-cart`,
-`shipping-checkout`, `shipping-companies`, `shipping-services`,
-`shipping-tracking`, `cart-read`, `orders-read`.
 
 Endpoints:
 
 - `POST /api/shipping/quote` (público, rate-limited, cache 5 min) —
   calcula opções de frete. Body:
   `{"zipCode":"04567-000","items":[{"productId":"p-tee-bw-black","quantity":1}]}`
-- `POST /api/shipping/label` (admin, `X-Admin-Token`) — cria o item no
-  carrinho ME, faz o checkout (debita saldo da ME), gera e imprime a etiqueta.
-- `GET  /api/shipping/track/:orderId` (admin, `X-Admin-Token`) — rastreio.
+- `POST /api/shipping/label` (admin, `X-Admin-Token`) — adiciona a
+  encomenda ao carrinho SuperFrete, faz o checkout (debita saldo), gera e
+  imprime a etiqueta.
+- `GET  /api/shipping/track/:orderId` (admin, `X-Admin-Token`) — usa
+  `GET /api/v0/order/info/:id` pra devolver status + código de rastreio.
+
+### Stripe (pagamentos — cartão + Pix)
+
+O fluxo `/api/checkout` cria um pedido local com status
+`pending_payment` e devolve `orderId`. O browser troca esse id por um
+`clientSecret` em `/api/payments/intent` e confirma o pagamento com os
+Stripe Elements. O webhook `/api/payments/webhook` marca o pedido como
+`paid` (ou `failed`) a partir dos eventos `payment_intent.*`.
+
+| Variável | Obrigatória | Onde |
+|---|---|---|
+| `STRIPE_SECRET_KEY` | sim | https://dashboard.stripe.com/test/apikeys (`sk_test_…`) |
+| `STRIPE_WEBHOOK_SECRET` | sim p/ webhook | https://dashboard.stripe.com/test/webhooks (`whsec_…`) |
+| `VITE_STRIPE_PUBLISHABLE_KEY` | sim no build do frontend | `pk_test_…` |
+
+> Pix via Stripe requer conta Stripe BR com o método habilitado. Cartão
+> funciona em qualquer conta. O desconto Pix (-5%) permanece aplicado no
+> backend antes da criação do PaymentIntent — o cliente paga o valor já
+> descontado.
+
+Endpoints:
+
+- `POST /api/checkout` (público) — valida o carrinho, aplica o desconto
+  Pix quando aplicável e guarda o pedido em memória. Retorna
+  `{orderId, totalCents, shippingCents, amountCents, status,
+  paymentMethod}`.
+- `POST /api/payments/intent` (público) — cria o PaymentIntent Stripe
+  para um pedido existente. Retorna `{clientSecret, amountCents, ...}`.
+- `POST /api/payments/webhook` (Stripe → backend) — valida assinatura
+  (HMAC SHA-256 sobre `t=<ts>.<body>`) e atualiza o status do pedido.
 
 Dimensões/peso de cada SKU ficam em `backend/shipping.go` (`packagingPresets`).
 Pese e ajuste antes de ir pra produção — quando um SKU não está na tabela,
@@ -91,6 +124,33 @@ npm run build
 
 A SPA também funciona sem o backend — há um catálogo de fallback equivalente
 ao seed em memória do Go.
+
+### Persistência, tokens e jobs
+
+- Pedidos são persistidos em **SQLite** (padrão `data/nast.db`).
+  Migrations vivem em `backend/migrations/*.sql` e são aplicadas
+  automaticamente no boot (idempotentes, ordenadas).
+- Cada pedido recebe um **token HMAC** (`orderToken`) que o frontend usa
+  para construir o link `/pedido/:token`. A chave vem de
+  `ORDER_TOKEN_SECRET`; se vazia, é derivada de `STRIPE_SECRET_KEY`
+  (rotacionar a chave invalida links antigos).
+- O webhook `payment_intent.succeeded` enfileira **dois jobs** em
+  goroutines:
+  - **Etiqueta SuperFrete** — `cart` → `checkout` → `generate` → `print`,
+    guardando tracking code e URL do PDF no pedido.
+  - **E-mail de confirmação** (Resend) — template em PT-BR com link do
+    pedido. Desligado silenciosamente se `RESEND_API_KEY` estiver vazio.
+
+Endpoint público (sanitizado):
+
+- `GET /api/orders/:token` → `{orderId, status, items, tracking…}` com
+  e-mail mascarado (`a•••s@dominio.com`). Retorna **401** se o token for
+  inválido ou expirado (180 dias), **404** se o pedido não existir.
+
+## Deploy
+
+Veja [`DEPLOYMENT.md`](./DEPLOYMENT.md) para o guia completo (Fly.io + domínio
++ Stripe webhook + Resend). `Dockerfile` + `fly.toml` já incluídos na raiz.
 
 ## Customização rápida
 

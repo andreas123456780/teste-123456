@@ -32,12 +32,12 @@ export function Header({ cartCount, onOpenCart }: Props) {
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         <motion.a
           href="#top"
-          className="flex items-center gap-3 text-white"
-          whileHover={{ opacity: 0.8 }}
+          aria-label="NAST — ir ao topo"
+          className="flex items-center text-white"
+          whileHover={{ opacity: 0.85 }}
           whileTap={{ scale: 0.97 }}
         >
-          <NastLogo size={28} />
-          <span className="text-lg font-black tracking-[0.4em]">NAST</span>
+          <NastLogo size={44} />
         </motion.a>
 
         <nav className="hidden items-center gap-10 text-xs font-semibold uppercase tracking-[0.25em] text-white/70 md:flex">

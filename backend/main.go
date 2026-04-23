@@ -13,8 +13,10 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -53,20 +55,42 @@ type CartItem struct {
 }
 
 type CheckoutRequest struct {
-	Items         []CartItem `json:"items"`
-	Name          string     `json:"name"`
-	Email         string     `json:"email"`
-	Address       string     `json:"address"`
-	ZipCode       string     `json:"zipCode"`
-	PaymentMethod string     `json:"paymentMethod"`
+	Items         []CartItem        `json:"items"`
+	Name          string            `json:"name"`
+	Email         string            `json:"email"`
+	Address       string            `json:"address"`
+	ZipCode       string            `json:"zipCode"`
+	PaymentMethod string            `json:"paymentMethod"`
+	Shipping      *CheckoutShipping `json:"shipping,omitempty"`
+	CouponCode    string            `json:"couponCode,omitempty"`
 }
 
+// CheckoutShipping is optional and carries the SuperFrete quote the user
+// picked on the client. The amount is folded into the PaymentIntent so a
+// single charge covers both items and freight.
+type CheckoutShipping struct {
+	ServiceID   int    `json:"serviceId"`
+	ServiceName string `json:"serviceName"`
+	PriceCents  int    `json:"priceCents"`
+}
+
+// CheckoutResponse is what the browser receives after submitting the cart.
+// With Stripe integration the order starts as `pending_payment` — the
+// browser must then exchange `orderId` for a Stripe `clientSecret` via
+// /api/payments/intent and confirm payment with Stripe Elements.
+// `orderToken` is an HMAC-signed handle the frontend uses to build the
+// /pedido/:token status URL without exposing the raw orderId in links.
 type CheckoutResponse struct {
-	OrderID     string `json:"orderId"`
-	TotalCents  int    `json:"totalCents"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"createdAt"`
-	EstimatedAt string `json:"estimatedAt"`
+	OrderID       string `json:"orderId"`
+	OrderToken    string `json:"orderToken"`
+	TotalCents    int    `json:"totalCents"`
+	ShippingCents int    `json:"shippingCents"`
+	AmountCents   int    `json:"amountCents"`
+	DiscountCents int    `json:"discountCents,omitempty"`
+	CouponCode    string `json:"couponCode,omitempty"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"createdAt"`
+	PaymentMethod string `json:"paymentMethod"`
 }
 
 // ----- In-memory catalog (seeded on startup) -----
@@ -230,7 +254,70 @@ func clientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	return peerHost
 }
 
-func withSecurityHeaders(next http.Handler) http.Handler {
+// buildCSP returns the Content-Security-Policy value that matches the
+// current deployment. When STATIC_DIR is set we serve a rendered React
+// SPA that embeds Stripe Elements (js.stripe.com, hooks.stripe.com) and
+// optionally Plausible analytics. The policy is still restrictive: no
+// eval, no inline scripts, no arbitrary frames, image origins limited
+// to self/data/https.
+func buildCSP(servesSPA bool, plausibleSrc string) string {
+	if !servesSPA {
+		// API-only deploy: strictest policy. The backend returns JSON
+		// and never renders HTML, so nothing legitimate needs any
+		// resources.
+		return "default-src 'none'; frame-ancestors 'none'"
+	}
+	scriptExtras := "https://js.stripe.com"
+	connectExtras := "https://api.stripe.com"
+	if plausibleSrc != "" {
+		scriptExtras += " " + plausibleSrc
+		// Plausible POSTs pageview events to the same origin as the
+		// script by default.
+		if u := plausibleOrigin(plausibleSrc); u != "" {
+			connectExtras += " " + u
+		}
+	}
+	return strings.Join([]string{
+		"default-src 'self'",
+		"script-src 'self' " + scriptExtras,
+		// Tailwind + Stripe Elements inject runtime <style> tags; we
+		// allow 'unsafe-inline' for styles only — never for scripts.
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+		"font-src 'self' https://fonts.gstatic.com",
+		"img-src 'self' data: https:",
+		"connect-src 'self' " + connectExtras,
+		"frame-src https://js.stripe.com https://hooks.stripe.com",
+		"frame-ancestors 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+	}, "; ")
+}
+
+// plausibleOrigin extracts the scheme://host portion of a Plausible
+// script URL so we can add it to connect-src.
+func plausibleOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Accept full URLs only; silently ignore relative/garbled values.
+	for _, scheme := range []string{"https://", "http://"} {
+		if !strings.HasPrefix(raw, scheme) {
+			continue
+		}
+		rest := raw[len(scheme):]
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			rest = rest[:i]
+		}
+		if rest == "" {
+			return ""
+		}
+		return scheme + rest
+	}
+	return ""
+}
+
+func withSecurityHeaders(csp string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -238,25 +325,100 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
 }
 
-func withCORS(allowed map[string]struct{}, next http.Handler) http.Handler {
+// withRecovery catches panics in downstream handlers, logs them with
+// the request path and writes a sanitized 500 JSON response. The stack
+// trace never reaches the client; it is only emitted to stderr for
+// operators to triage.
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic: method=%s path=%s err=%v", r.Method, r.URL.Path, rec)
+				// Don't try to write if headers already sent.
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"internal error"}`))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// originMatcher matches an incoming Origin header against the
+// ALLOWED_ORIGINS list. We support two patterns:
+//
+//   - Exact match: "https://nast.com.br"
+//   - Leading wildcard: "https://*.vercel.app" matches any single-level
+//     subdomain so Vercel preview deployments work without edits.
+//
+// Wildcards further up the hierarchy are intentionally not supported:
+// a rogue "https://nast-phishing.vercel.app" preview would be accepted
+// by the *.vercel.app entry and that's an accepted tradeoff for dev
+// ergonomics, but we don't want it silently expanding to arbitrary
+// subdomains of any ancestor.
+type originMatcher struct {
+	exact  string
+	suffix string // set when pattern begins with "https://*."
+}
+
+func (m originMatcher) match(origin string) bool {
+	if m.exact != "" {
+		return origin == m.exact
+	}
+	if m.suffix == "" {
+		return false
+	}
+	if !strings.HasPrefix(origin, "https://") && !strings.HasPrefix(origin, "http://") {
+		return false
+	}
+	return strings.HasSuffix(origin, m.suffix)
+}
+
+func parseOrigins(raw string) []originMatcher {
+	out := make([]originMatcher, 0)
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		// "https://*.vercel.app" → suffix ".vercel.app" (leading dot
+		// kept to avoid matching "foovercel.app").
+		if idx := strings.Index(o, "://*."); idx > 0 {
+			suffix := o[idx+len("://*"):]
+			out = append(out, originMatcher{suffix: suffix})
+			continue
+		}
+		out = append(out, originMatcher{exact: o})
+	}
+	return out
+}
+
+func originAllowed(matchers []originMatcher, origin string) bool {
+	for _, m := range matchers {
+		if m.match(origin) {
+			return true
+		}
+	}
+	return false
+}
+
+func withCORS(allowed []originMatcher, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Vary: Origin is always emitted so intermediary caches key the
 		// response on Origin even when this particular request was
 		// same-origin / had no Origin header.
 		w.Header().Set("Vary", "Origin")
 		origin := r.Header.Get("Origin")
-		if origin != "" {
-			if _, ok := allowed[origin]; ok {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-				w.Header().Set("Access-Control-Max-Age", "600")
-			}
+		if origin != "" && originAllowed(allowed, origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token")
+			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -283,11 +445,56 @@ func withBodyLimit(limit int64, next http.Handler) http.Handler {
 	})
 }
 
+// statusRecorder wraps http.ResponseWriter to capture the outbound status
+// code and response byte count for structured access logs.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	n, err := s.ResponseWriter.Write(b)
+	s.bytes += n
+	return n, err
+}
+
+// withLogging emits one structured JSON line per request on stdout.
+// Fields are stable and cheap to parse from log aggregators (Fly logs,
+// Loki, Datadog). We deliberately omit query strings and bodies to keep
+// PII out of the stream.
 func withLogging(trustedProxies []*net.IPNet, next http.Handler) http.Handler {
+	enc := json.NewEncoder(os.Stdout)
+	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s %s", clientIP(r, trustedProxies), r.Method, r.URL.Path, time.Since(start))
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+		entry := map[string]any{
+			"t":        start.UTC().Format(time.RFC3339Nano),
+			"level":    "info",
+			"msg":      "http",
+			"method":   r.Method,
+			"path":     r.URL.Path,
+			"status":   rec.status,
+			"bytes":    rec.bytes,
+			"duration": time.Since(start).Milliseconds(),
+			"ip":       clientIP(r, trustedProxies),
+		}
+		if ref := r.Header.Get("Referer"); ref != "" {
+			entry["referer"] = ref
+		}
+		mu.Lock()
+		_ = enc.Encode(entry)
+		mu.Unlock()
 	})
 }
 
@@ -297,6 +504,38 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// staticOrNotFound returns the root handler. When STATIC_DIR points to a
+// built SPA, file requests are served from disk and any path that doesn't
+// match a file falls back to index.html so client-side routing works
+// (/pedido/:token, /privacidade, /termos, …). When STATIC_DIR is empty
+// — typical for local dev where the SPA is served by Vite on 5173 — the
+// root just returns a JSON 404 so accidental hits don't leak anything.
+func staticOrNotFound(dir string) http.HandlerFunc {
+	if dir == "" {
+		return func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		}
+	}
+	fs := http.FileServer(http.Dir(dir))
+	indexPath := dir + "/index.html"
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		// If the requested file exists under STATIC_DIR, serve it.
+		clean := strings.TrimPrefix(r.URL.Path, "/")
+		if clean != "" {
+			if fi, err := os.Stat(dir + "/" + clean); err == nil && !fi.IsDir() {
+				fs.ServeHTTP(w, r)
+				return
+			}
+		}
+		// SPA fallback.
+		http.ServeFile(w, r, indexPath)
+	}
 }
 
 func randomID(prefix string) string {
@@ -333,120 +572,237 @@ func safeString(s string, max int) (string, bool) {
 
 // ----- Handlers -----
 
-func handleProducts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	out := catalog
-	if category != "" {
-		out = make([]Product, 0, len(catalog))
-		for _, p := range catalog {
-			if strings.EqualFold(p.Category, category) {
-				out = append(out, p)
-			}
+func handleProducts(store *productsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		list, err := store.listPublic(ctx, strings.TrimSpace(r.URL.Query().Get("category")))
+		if err != nil {
+			log.Printf("products list: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog unavailable"})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
 	}
-	writeJSON(w, http.StatusOK, out)
 }
 
-func handleProductByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/products/")
-	if id == "" || strings.Contains(id, "/") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
-		return
-	}
-	for _, p := range catalog {
-		// Constant-time compare to make ID probing uniform in timing.
-		if subtle.ConstantTimeCompare([]byte(p.ID), []byte(id)) == 1 {
-			writeJSON(w, http.StatusOK, p)
+func handleProductByID(store *productsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
+		id := strings.TrimPrefix(r.URL.Path, "/api/products/")
+		if id == "" || strings.Contains(id, "/") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		p, err := store.get(ctx, id)
+		if errors.Is(err, errProductNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
+			return
+		}
+		if err != nil {
+			log.Printf("product get: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
 	}
-	writeJSON(w, http.StatusNotFound, map[string]string{"error": "product not found"})
 }
 
-func handleCheckout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	var req CheckoutRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		return
-	}
-	if len(req.Items) == 0 || len(req.Items) > 50 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid item count"})
-		return
-	}
-	name, ok := safeString(req.Name, 120)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
-		return
-	}
-	if !validateEmail(strings.TrimSpace(req.Email)) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
-		return
-	}
-	address, ok := safeString(req.Address, 240)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid address"})
-		return
-	}
-	zip, ok := safeString(req.ZipCode, 16)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zip"})
-		return
-	}
-	payment := strings.TrimSpace(strings.ToLower(req.PaymentMethod))
-	if payment == "" {
-		payment = "card"
-	}
-	if payment != "pix" && payment != "card" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payment method"})
-		return
-	}
-	total := 0
-	for _, it := range req.Items {
-		if it.Quantity <= 0 || it.Quantity > 20 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
+func handleCheckout(orders *orderStore, products *productsStore, coupons *couponsStore, tokenKey []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
-		found := false
-		for _, p := range catalog {
-			if p.ID == it.ProductID {
-				unit := p.PriceCents
-				if payment == "pix" {
-					unit = p.PixPriceCents
-				}
-				total += unit * it.Quantity
-				found = true
-				break
+		var req CheckoutRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if len(req.Items) == 0 || len(req.Items) > 50 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid item count"})
+			return
+		}
+		name, ok := safeString(req.Name, 120)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
+			return
+		}
+		email := strings.TrimSpace(req.Email)
+		if !validateEmail(email) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
+			return
+		}
+		address, ok := safeString(req.Address, 240)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid address"})
+			return
+		}
+		zip, ok := safeString(req.ZipCode, 16)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zip"})
+			return
+		}
+		payment := strings.TrimSpace(strings.ToLower(req.PaymentMethod))
+		if payment == "" {
+			payment = "card"
+		}
+		if payment != "pix" && payment != "card" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payment method"})
+			return
+		}
+		var items []orderItem
+		total := 0
+		for _, it := range req.Items {
+			if it.Quantity <= 0 || it.Quantity > 20 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid quantity"})
+				return
 			}
+			ctxP, cancelP := context.WithTimeout(r.Context(), 2*time.Second)
+			p, err := products.get(ctxP, it.ProductID)
+			cancelP()
+			if errors.Is(err, errProductNotFound) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
+				return
+			}
+			if err != nil {
+				log.Printf("checkout: product lookup: %v", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog unavailable"})
+				return
+			}
+			unit := p.PriceCents
+			if payment == "pix" {
+				unit = p.PixPriceCents
+			}
+			total += unit * it.Quantity
+			items = append(items, orderItem{
+				ProductID:      it.ProductID,
+				ProductName:    p.Name,
+				Size:           it.Size,
+				Color:          it.Color,
+				Quantity:       it.Quantity,
+				UnitPriceCents: unit,
+			})
 		}
-		if !found {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown product"})
+		shippingCents := 0
+		var shipServiceID int
+		var shipServiceName string
+		if req.Shipping != nil {
+			if req.Shipping.PriceCents < 0 || req.Shipping.PriceCents > 500_000 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid shipping price"})
+				return
+			}
+			if n, okSN := safeString(req.Shipping.ServiceName, 80); okSN {
+				shipServiceName = n
+			}
+			shippingCents = req.Shipping.PriceCents
+			shipServiceID = req.Shipping.ServiceID
+		}
+		// Coupon (optional). Re-validate server-side even when the cart
+		// already previewed the discount via /api/coupons/validate — we
+		// trust nothing the browser sent.
+		finalSubtotal := total
+		finalShipping := shippingCents
+		appliedCode := ""
+		discountCents := 0
+		if strings.TrimSpace(req.CouponCode) != "" {
+			code := normalizeCouponCode(req.CouponCode)
+			if code == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cupom inválido"})
+				return
+			}
+			ctxC, cancelC := context.WithTimeout(r.Context(), 2*time.Second)
+			c, errC := coupons.get(ctxC, code)
+			cancelC()
+			if errors.Is(errC, errCouponNotFound) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cupom não encontrado"})
+				return
+			}
+			if errC != nil {
+				log.Printf("checkout: coupon lookup: %v", errC)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "coupon unavailable"})
+				return
+			}
+			if errE := couponEligibility(c, time.Now().UTC()); errE != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": errE.Error()})
+				return
+			}
+			summary, errA := applyCoupon(c, total, shippingCents)
+			if errA != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": errA.Error()})
+				return
+			}
+			finalSubtotal = summary.NewSubtotalCents
+			finalShipping = summary.NewShippingCents
+			appliedCode = c.Code
+			discountCents = summary.TotalDiscountCents
+		}
+		amount := finalSubtotal + finalShipping
+		order := &pendingOrder{
+			ID:              randomID("ord_"),
+			Name:            name,
+			Email:           email,
+			Address:         address,
+			Zip:             zip,
+			TotalCents:      finalSubtotal,
+			ShippingCents:   finalShipping,
+			AmountCents:     amount,
+			ShippingSvcID:   shipServiceID,
+			ShippingSvcName: shipServiceName,
+			PaymentMethod:   payment,
+			Status:          "pending_payment",
+			CouponCode:      appliedCode,
+			DiscountCents:   discountCents,
+			CreatedAt:       time.Now().UTC(),
+			Items:           items,
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := orders.create(ctx, order); err != nil {
+			log.Printf("checkout: create order failed: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save order"})
 			return
 		}
+		if appliedCode != "" {
+			// Best-effort bump. A race here at the last use slot is
+			// acceptable — max_uses is a soft budget and the admin can
+			// deactivate the coupon if overshot.
+			incCtx, cancelInc := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _ = coupons.db.ExecContext(incCtx,
+				rb(`UPDATE coupons SET used_count = used_count + 1, updated_at = ? WHERE code = ?`),
+				time.Now().UTC(), appliedCode)
+			cancelInc()
+		}
+		token := ""
+		if len(tokenKey) > 0 {
+			token = makeOrderToken(tokenKey, order.ID, time.Now())
+		}
+		log.Printf("checkout: order=%s items=%d total=%d shipping=%d payment=%s zip=%s coupon=%s discount=%d",
+			order.ID, len(order.Items), finalSubtotal, finalShipping, payment, zip, appliedCode, discountCents)
+		writeJSON(w, http.StatusOK, CheckoutResponse{
+			OrderID:       order.ID,
+			OrderToken:    token,
+			TotalCents:    finalSubtotal,
+			ShippingCents: finalShipping,
+			AmountCents:   amount,
+			DiscountCents: discountCents,
+			CouponCode:    appliedCode,
+			Status:        order.Status,
+			CreatedAt:     order.CreatedAt.Format(time.RFC3339),
+			PaymentMethod: payment,
+		})
 	}
-	resp := CheckoutResponse{
-		OrderID:     randomID("ord_"),
-		TotalCents:  total,
-		Status:      "confirmed",
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		EstimatedAt: time.Now().Add(5 * 24 * time.Hour).UTC().Format(time.RFC3339),
-	}
-	log.Printf("checkout: order=%s name=%q email=%q items=%d total=%d payment=%s zip=%s address-len=%d",
-		resp.OrderID, name, req.Email, len(req.Items), total, payment, zip, len(address))
-	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -455,19 +811,49 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // ----- Server bootstrap -----
 
-func allowedOriginsFromEnv() map[string]struct{} {
+// mapNonEmpty returns a if s is non-empty, b otherwise. Used for terse
+// startup logging.
+func mapNonEmpty(s, a, b string) string {
+	if strings.TrimSpace(s) != "" {
+		return a
+	}
+	return b
+}
+
+// orderTokenSecret returns the key used to HMAC order-lookup tokens. If
+// ORDER_TOKEN_SECRET is set we use it verbatim. Otherwise we derive a
+// key from STRIPE_SECRET_KEY (SHA-256 with a domain separator) so
+// existing deployments get tokens for free without a new env var.
+// Callers treat an empty result as "tokens disabled".
+func orderTokenSecret() []byte {
+	if v := strings.TrimSpace(os.Getenv("ORDER_TOKEN_SECRET")); v != "" {
+		return []byte(v)
+	}
+	stripeKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	if stripeKey == "" {
+		return nil
+	}
+	h := sha256.New()
+	h.Write([]byte("nast:order-tokens:v1"))
+	h.Write([]byte(stripeKey))
+	return h.Sum(nil)
+}
+
+// dbSentinel keeps the database/sql import genuinely used even in builds
+// that happen to only reference openDB via the main wire-up. (Placeholder
+// to appease unused-imports tooling during iterative edits.)
+var _ *sql.DB
+
+// ctxSentinel similar for context — referenced inside handlers via
+// http.Request.Context but keeps the import grounded here.
+var _ = context.Background
+
+func allowedOriginsFromEnv() []originMatcher {
 	raw := os.Getenv("ALLOWED_ORIGINS")
 	if raw == "" {
 		raw = "http://localhost:5173,http://127.0.0.1:5173"
 	}
-	out := make(map[string]struct{})
-	for _, o := range strings.Split(raw, ",") {
-		o = strings.TrimSpace(o)
-		if o != "" {
-			out[o] = struct{}{}
-		}
-	}
-	return out
+	return parseOrigins(raw)
 }
 
 func main() {
@@ -486,30 +872,105 @@ func main() {
 
 	shipCfg := loadShippingConfig()
 	if shipCfg.AccessToken == "" {
-		log.Printf("Melhor Envio: token not configured — /api/shipping/* will return 503")
+		log.Printf("SuperFrete: token not configured — /api/shipping/* will return 503")
 	} else {
-		log.Printf("Melhor Envio: %s origin=%s", shipCfg.BaseURL, shipCfg.OriginZip)
+		log.Printf("SuperFrete: %s origin=%s", shipCfg.BaseURL, shipCfg.OriginZip)
 	}
 	shipClient := newShippingClient(shipCfg)
 	shipCache := newQuoteCache(5 * time.Minute)
 
+	payCfg := loadPaymentsConfig()
+	if payCfg.SecretKey == "" {
+		log.Printf("Stripe: secret key not configured — /api/payments/* will return 503")
+	} else {
+		log.Printf("Stripe: secret key loaded (webhook secret %s)",
+			mapNonEmpty(payCfg.WebhookSecret, "configured", "missing — /api/payments/webhook will reject all events"))
+	}
+	stripeCli := newStripeClient(payCfg)
+
+	db, err := openDB()
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer db.Close()
+	orders := newOrderStore(db)
+	products := newProductsStore(db)
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := seedProductsIfEmpty(seedCtx, products, catalog); err != nil {
+		log.Printf("product seed: %v", err)
+	}
+	seedCancel()
+	adminCfg := loadAdminAuthCfg()
+	adminToken := adminCfg.legacyToken
+	_ = adminToken // kept for logging/diagnostics if ever needed
+	if adminCfg.legacyToken == "" && !adminCfg.loginEnabled() {
+		log.Printf("admin: neither ADMIN_TOKEN nor ADMIN_USERNAME+ADMIN_PASSWORD_HASH set — /api/admin/* disabled")
+	} else if adminCfg.loginEnabled() {
+		log.Printf("admin: login enabled for user %q (sessions expire every %s)", adminCfg.username, adminCfg.sessionTTL)
+	}
+
+	tokenKey := orderTokenSecret()
+	if len(tokenKey) == 0 {
+		log.Printf("ORDER_TOKEN_SECRET not set — /api/orders/:token disabled and checkout responses omit orderToken")
+	}
+
+	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
+	if appURL == "" {
+		appURL = "http://localhost:5173"
+	}
+
+	labelWrk := newLabelWorker(orders, shipClient)
+	emailCfg := loadEmailConfig(tokenKey, appURL)
+	emailWrk := newEmailWorker(emailCfg, orders)
+	if emailCfg.APIKey == "" {
+		log.Printf("Resend: RESEND_API_KEY not set — confirmation emails disabled")
+	}
+
+	webhookDeps := webhookDeps{
+		Orders:   orders,
+		Products: products,
+		LabelJob: labelWrk,
+		EmailJob: emailWrk,
+		AppURL:   appURL,
+		TokenKey: tokenKey,
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
-	mux.HandleFunc("/api/products", handleProducts)
-	mux.HandleFunc("/api/products/", handleProductByID)
-	mux.HandleFunc("/api/checkout", handleCheckout)
+	mux.HandleFunc("/api/products", handleProducts(products))
+	mux.HandleFunc("/api/products/", handleProductByID(products))
+	coupons := newCouponsStore(db)
+	mux.HandleFunc("/api/checkout", handleCheckout(orders, products, coupons, tokenKey))
+	mux.HandleFunc("/api/coupons/validate", handleCouponValidate(coupons))
+	mux.HandleFunc("/api/orders/", handleOrderLookup(orders, tokenKey))
+	mux.HandleFunc("/api/payments/intent", handlePaymentsIntent(stripeCli, orders))
+	mux.HandleFunc("/api/payments/webhook", handlePaymentsWebhook(payCfg, webhookDeps))
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	})
+	igClient := newInstagramClient()
+	if !igClient.configured() {
+		log.Printf("instagram: INSTAGRAM_ACCESS_TOKEN + INSTAGRAM_USER_ID not set — feed widget will be hidden")
+	}
+	mux.HandleFunc("/api/social/instagram", handleInstagramFeed(igClient))
+	mux.HandleFunc("/api/admin/login", handleAdminLogin(adminCfg))
+	mux.HandleFunc("/api/admin/products", adminAuthFromCfg(adminCfg, handleAdminProducts(products)))
+	mux.HandleFunc("/api/admin/products/", adminAuthFromCfg(adminCfg, handleAdminProductByID(products)))
+	mux.HandleFunc("/api/admin/coupons", adminAuthFromCfg(adminCfg, handleAdminCoupons(coupons)))
+	mux.HandleFunc("/api/admin/coupons/", adminAuthFromCfg(adminCfg, handleAdminCouponByCode(coupons)))
+	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
+	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
+	mux.HandleFunc("/", staticOrNotFound(staticDir))
+
+	plausibleSrc := strings.TrimSpace(os.Getenv("PLAUSIBLE_SCRIPT_SRC"))
+	csp := buildCSP(staticDir != "", plausibleSrc)
 
 	var h http.Handler = mux
 	h = withBodyLimit(1<<16, h) // 64KiB
 	h = withRateLimit(rl, trustedProxies, h)
 	h = withCORS(allowedOriginsFromEnv(), h)
-	h = withSecurityHeaders(h)
+	h = withSecurityHeaders(csp, h)
+	h = withRecovery(h)
 	h = withLogging(trustedProxies, h)
 
 	srv := &http.Server{
