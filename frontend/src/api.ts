@@ -147,6 +147,63 @@ export type AdminCouponPayload = {
   note?: string;
 };
 
+// AdminLoginResponse is returned by POST /api/admin/login on success.
+export type AdminLoginResponse = {
+  token: string;
+  username: string;
+  expiresAt: string;
+};
+
+// AdminStats mirrors the Go adminStats struct.
+export type AdminStats = {
+  generatedAt: string;
+  orders: {
+    total: number;
+    pendingPayment: number;
+    paid: number;
+    shipped: number;
+    failed: number;
+    canceled: number;
+  };
+  revenue: {
+    grossCents: number;
+    shippingCents: number;
+    discountCents: number;
+    paidOrderCount: number;
+    avgTicketCents: number;
+  };
+  topProducts: {
+    productId: string;
+    productName: string;
+    quantity: number;
+    grossCents: number;
+  }[];
+  revenueByDay: {
+    day: string;
+    grossCents: number;
+    orderCount: number;
+  }[];
+  recentOrders: {
+    id: string;
+    status: string;
+    paymentMethod: string;
+    amountCents: number;
+    customerName: string;
+    createdAt: string;
+  }[];
+};
+
+export const adminAuthApi = {
+  // login returns an HMAC session token, NOT the legacy ADMIN_TOKEN.
+  // Backend accepts either as X-Admin-Token on subsequent calls.
+  login: (username: string, password: string) =>
+    request<AdminLoginResponse>(`/api/admin/login`, {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  stats: (token: string) => adminRequest<AdminStats>(`/api/admin/stats`, token),
+};
+
 export const adminCouponsApi = {
   list: (token: string) =>
     adminRequest<Coupon[]>(`/api/admin/coupons`, token),

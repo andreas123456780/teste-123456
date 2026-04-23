@@ -900,7 +900,14 @@ func main() {
 		log.Printf("product seed: %v", err)
 	}
 	seedCancel()
-	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	adminCfg := loadAdminAuthCfg()
+	adminToken := adminCfg.legacyToken
+	_ = adminToken // kept for logging/diagnostics if ever needed
+	if adminCfg.legacyToken == "" && !adminCfg.loginEnabled() {
+		log.Printf("admin: neither ADMIN_TOKEN nor ADMIN_USERNAME+ADMIN_PASSWORD_HASH set — /api/admin/* disabled")
+	} else if adminCfg.loginEnabled() {
+		log.Printf("admin: login enabled for user %q (sessions expire every %s)", adminCfg.username, adminCfg.sessionTTL)
+	}
 
 	tokenKey := orderTokenSecret()
 	if len(tokenKey) == 0 {
@@ -941,10 +948,12 @@ func main() {
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
-	mux.HandleFunc("/api/admin/products", adminAuth(adminToken, handleAdminProducts(products)))
-	mux.HandleFunc("/api/admin/products/", adminAuth(adminToken, handleAdminProductByID(products)))
-	mux.HandleFunc("/api/admin/coupons", adminAuth(adminToken, handleAdminCoupons(coupons)))
-	mux.HandleFunc("/api/admin/coupons/", adminAuth(adminToken, handleAdminCouponByCode(coupons)))
+	mux.HandleFunc("/api/admin/login", handleAdminLogin(adminCfg))
+	mux.HandleFunc("/api/admin/products", adminAuthFromCfg(adminCfg, handleAdminProducts(products)))
+	mux.HandleFunc("/api/admin/products/", adminAuthFromCfg(adminCfg, handleAdminProductByID(products)))
+	mux.HandleFunc("/api/admin/coupons", adminAuthFromCfg(adminCfg, handleAdminCoupons(coupons)))
+	mux.HandleFunc("/api/admin/coupons/", adminAuthFromCfg(adminCfg, handleAdminCouponByCode(coupons)))
+	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 

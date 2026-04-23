@@ -10,23 +10,15 @@ import (
 	"time"
 )
 
-// adminAuth guards every /api/admin/* endpoint with the X-Admin-Token
-// header. Missing token or mismatch returns 401 with no body so probes
-// can't distinguish "admin not configured" from "wrong token".
+// adminAuth is a thin legacy-token-only wrapper around adminAuthFromCfg.
+// Retained so existing tests and the minimal legacy-token-only
+// configuration keep working without duplicating the header logic.
 func adminAuth(expected string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if expected == "" {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin not configured"})
-			return
-		}
-		got := r.Header.Get("X-Admin-Token")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
+	return adminAuthFromCfg(adminAuthCfg{legacyToken: expected}, next)
 }
+
+// suppress unused-import warning when this file is compiled alone.
+var _ = subtle.ConstantTimeCompare
 
 // adminProductPayload is the shape accepted by the admin CRUD endpoints.
 // `hidden` and `sortOrder` are optional overrides that let the operator
