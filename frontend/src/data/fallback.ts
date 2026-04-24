@@ -17,6 +17,7 @@ export const FALLBACK_PRODUCTS: Product[] = [
     sizes: ["P", "M", "G", "Baby Look"],
     tags: ["edição limitada"],
     stock: 24,
+    stockBySize: { P: 6, M: 6, G: 6, "Baby Look": 6 },
   },
   {
     id: "p-tee-bw-white",
@@ -32,6 +33,7 @@ export const FALLBACK_PRODUCTS: Product[] = [
     sizes: ["P", "M", "G", "Baby Look"],
     tags: ["edição limitada"],
     stock: 24,
+    stockBySize: { P: 6, M: 6, G: 6, "Baby Look": 6 },
   },
   {
     id: "p-boxy-black",
@@ -47,6 +49,7 @@ export const FALLBACK_PRODUCTS: Product[] = [
     sizes: ["P", "M", "G"],
     tags: ["boxy fit"],
     stock: 18,
+    stockBySize: { P: 6, M: 6, G: 6 },
   },
   {
     id: "p-boxy-white",
@@ -62,5 +65,6 @@ export const FALLBACK_PRODUCTS: Product[] = [
     sizes: ["P", "M", "G"],
     tags: ["boxy fit"],
     stock: 18,
+    stockBySize: { P: 6, M: 6, G: 6 },
   },
 ];

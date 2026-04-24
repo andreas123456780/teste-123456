@@ -156,5 +156,10 @@ func validateProduct(p *Product) error {
 	if p.Stock < 0 || p.Stock > 10_000 {
 		return errors.New("invalid stock")
 	}
+	for size, qty := range p.StockBySize {
+		if qty < 0 || qty > 10_000 {
+			return errors.New("invalid stockBySize for size " + size)
+		}
+	}
 	return nil
 }
