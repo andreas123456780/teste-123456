@@ -179,3 +179,46 @@ func TestDecrementStock(t *testing.T) {
 		t.Fatalf("stock should clamp to 0, got %d", after.Stock)
 	}
 }
+
+func TestDecrementStockBySize(t *testing.T) {
+	_, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+
+	before, _ := prods.get(context.Background(), "p-tee-bw-black")
+	startP := before.StockBySize["P"]
+	startM := before.StockBySize["M"]
+	startTotal := before.Stock
+	if startP == 0 {
+		t.Fatalf("seed should populate size P, got 0")
+	}
+
+	// Deducting 1 of P must only touch P and the total.
+	rem, err := prods.decrementStockBySize(context.Background(), "p-tee-bw-black", "P", 1)
+	if err != nil || rem != 0 {
+		t.Fatalf("decrement P: rem=%d err=%v", rem, err)
+	}
+	after, _ := prods.get(context.Background(), "p-tee-bw-black")
+	if after.StockBySize["P"] != startP-1 {
+		t.Fatalf("P should drop by 1: want %d got %d", startP-1, after.StockBySize["P"])
+	}
+	if after.StockBySize["M"] != startM {
+		t.Fatalf("M should not change: want %d got %d", startM, after.StockBySize["M"])
+	}
+	if after.Stock != startTotal-1 {
+		t.Fatalf("total should drop by 1: want %d got %d", startTotal-1, after.Stock)
+	}
+
+	// Oversell on a specific size → clamps to 0 and reports remainder.
+	rem, err = prods.decrementStockBySize(context.Background(), "p-tee-bw-black", "P", startP+50)
+	if err != nil {
+		t.Fatalf("oversell: %v", err)
+	}
+	if rem == 0 {
+		t.Fatalf("oversell should return remainder")
+	}
+	after, _ = prods.get(context.Background(), "p-tee-bw-black")
+	if after.StockBySize["P"] != 0 {
+		t.Fatalf("P should clamp to 0, got %d", after.StockBySize["P"])
+	}
+}

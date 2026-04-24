@@ -202,6 +202,66 @@ func TestCheckout_WithShipping(t *testing.T) {
 	}
 }
 
+func TestCheckout_RejectsOutOfStockSize(t *testing.T) {
+	orders, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+
+	// Drain size M to 0 so the next checkout must be rejected.
+	ctx := context.Background()
+	p, _ := prods.get(ctx, "p-tee-bw-black")
+	if _, err := prods.decrementStockBySize(ctx, p.ID, "M", p.StockBySize["M"]); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	body := CheckoutRequest{
+		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
+		Name:          "Andreas Teste",
+		Email:         "andreas@example.com",
+		Address:       "Rua das Flores, 123",
+		ZipCode:       "01000-000",
+		PaymentMethod: "card",
+	}
+	b, _ := json.Marshal(body)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on out-of-stock size, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Size P must still succeed.
+	body.Items[0].Size = "P"
+	b, _ = json.Marshal(body)
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for size P, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCheckout_RejectsUnknownSize(t *testing.T) {
+	orders, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+	body := CheckoutRequest{
+		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "XXL", Color: "preto"}},
+		Name:          "Andreas Teste",
+		Email:         "andreas@example.com",
+		Address:       "Rua das Flores, 123",
+		ZipCode:       "01000-000",
+		PaymentMethod: "card",
+	}
+	b, _ := json.Marshal(body)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
+	handleCheckout(orders, prods, newTestCoupons(t, db), []byte("k"))(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown size, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestCheckout_InvalidPaymentMethod(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()

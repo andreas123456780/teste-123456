@@ -20,12 +20,31 @@ type Props = {
   ) => void;
 };
 
+/** Products migrated after the stock-per-size rollout carry a populated
+ * `stockBySize` map. Legacy rows have `{}` — those should NOT show
+ * "esgotado" ghosting (we don't know the real inventory per size). */
+function hasPerSizeStock(product: Product | null | undefined): boolean {
+  if (!product || !product.stockBySize) return false;
+  return Object.keys(product.stockBySize).length > 0;
+}
+
+function sizeStock(product: Product, size: string): number {
+  if (!hasPerSizeStock(product)) return Number.POSITIVE_INFINITY;
+  return product.stockBySize[size] ?? 0;
+}
+
 function pickInitialSize(
   product: Product | null | undefined,
   preferred: string | undefined,
 ): string {
   if (!product) return "";
-  if (preferred && product.sizes.includes(preferred)) return preferred;
+  const inStock = (s: string) => sizeStock(product, s) > 0;
+  if (preferred && product.sizes.includes(preferred) && inStock(preferred)) {
+    return preferred;
+  }
+  const firstAvailable = product.sizes.find(inStock);
+  if (firstAvailable) return firstAvailable;
+  // All sizes sold out — default to the first so the UI still renders.
   return product.sizes[0] ?? "";
 }
 
@@ -143,53 +162,95 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                   <SizeChartLink label="ver medidas" />
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {product.sizes.map((s) => (
-                    <motion.button
-                      key={s}
-                      onClick={() => setSize(s)}
-                      whileHover={{ y: -1 }}
-                      whileTap={{ scale: 0.96 }}
-                      className={`min-w-[2.75rem] border px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest transition ${
-                        size === s
-                          ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-black"
-                          : "border-white/15 text-white/60 hover:border-white/40"
-                      }`}
-                    >
-                      {s}
-                    </motion.button>
-                  ))}
+                  {product.sizes.map((s) => {
+                    const soldOut = sizeStock(product, s) <= 0;
+                    const selected = size === s;
+                    return (
+                      <motion.button
+                        key={s}
+                        type="button"
+                        onClick={() => {
+                          if (!soldOut) setSize(s);
+                        }}
+                        disabled={soldOut}
+                        aria-disabled={soldOut}
+                        whileHover={soldOut ? undefined : { y: -1 }}
+                        whileTap={soldOut ? undefined : { scale: 0.96 }}
+                        className={`min-w-[2.75rem] border px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest transition ${
+                          soldOut
+                            ? "cursor-not-allowed border-white/10 text-white/25 line-through"
+                            : selected
+                              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-black"
+                              : "border-white/15 text-white/60 hover:border-white/40"
+                        }`}
+                        title={soldOut ? "Esgotado" : undefined}
+                      >
+                        {s}
+                      </motion.button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <motion.button
-                type="button"
-                onClick={() => {
-                  onAdd(product, size, color, { openCart: true });
-                  onClose();
-                }}
-                whileHover={{ y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                className="mt-8 flex items-center justify-center gap-2 bg-[var(--color-accent)] px-6 py-4 text-xs font-black uppercase tracking-[0.3em] text-black transition hover:bg-white"
-              >
-                <Plus className="h-4 w-4" />
-                Comprar agora
-              </motion.button>
-              <motion.button
-                type="button"
-                onClick={() => {
-                  onAdd(product, size, color, { openCart: false });
-                  onClose();
-                }}
-                whileHover={{ y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                className="mt-2 flex items-center justify-center gap-2 border border-white/20 bg-transparent px-6 py-3.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white transition hover:border-white"
-              >
-                <Plus className="h-4 w-4" />
-                Adicionar à sacola
-              </motion.button>
+              {(() => {
+                const currentStock = sizeStock(product, size);
+                const disabled = currentStock <= 0;
+                return (
+                  <>
+                    <motion.button
+                      type="button"
+                      onClick={() => {
+                        if (disabled) return;
+                        onAdd(product, size, color, { openCart: true });
+                        onClose();
+                      }}
+                      disabled={disabled}
+                      aria-disabled={disabled}
+                      whileHover={disabled ? undefined : { y: -1 }}
+                      whileTap={disabled ? undefined : { scale: 0.98 }}
+                      className={`mt-8 flex items-center justify-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-[0.3em] transition ${
+                        disabled
+                          ? "cursor-not-allowed bg-white/10 text-white/40"
+                          : "bg-[var(--color-accent)] text-black hover:bg-white"
+                      }`}
+                    >
+                      <Plus className="h-4 w-4" />
+                      {disabled ? "Esgotado" : "Comprar agora"}
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      onClick={() => {
+                        if (disabled) return;
+                        onAdd(product, size, color, { openCart: false });
+                        onClose();
+                      }}
+                      disabled={disabled}
+                      aria-disabled={disabled}
+                      whileHover={disabled ? undefined : { y: -1 }}
+                      whileTap={disabled ? undefined : { scale: 0.98 }}
+                      className={`mt-2 flex items-center justify-center gap-2 border bg-transparent px-6 py-3.5 text-[11px] font-bold uppercase tracking-[0.3em] transition ${
+                        disabled
+                          ? "cursor-not-allowed border-white/10 text-white/30"
+                          : "border-white/20 text-white hover:border-white"
+                      }`}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Adicionar à sacola
+                    </motion.button>
+                  </>
+                );
+              })()}
 
               <div className="mt-4 flex items-center justify-between text-[11px] text-white/50">
-                <span>Estoque: {product.stock} unidades</span>
+                <span>
+                  {hasPerSizeStock(product)
+                    ? size
+                      ? sizeStock(product, size) > 0
+                        ? `Estoque ${size}: ${sizeStock(product, size)} un`
+                        : `Tamanho ${size} esgotado`
+                      : `Estoque total: ${product.stock} un`
+                    : `Estoque: ${product.stock} unidades`}
+                </span>
                 <span className="flex gap-1">
                   {product.tags.map((t) => (
                     <span

@@ -34,8 +34,19 @@ function emptyProduct(): AdminProductPayload {
     sizes: [],
     tags: [],
     stock: 0,
+    stockBySize: {},
     hidden: false,
   };
+}
+
+/** Sum of every per-size entry. The totals must stay in sync with the
+ * legacy `stock` integer the backend still stores (used for the catalog
+ * table + coupon minimums), so we recompute it whenever a size input
+ * changes. */
+function sumStockBySize(m: Record<string, number>): number {
+  let total = 0;
+  for (const v of Object.values(m)) total += Number.isFinite(v) ? v : 0;
+  return total;
 }
 
 function emptyCoupon(): AdminCouponPayload {
@@ -807,12 +818,13 @@ function ProductEditForm({
             />
           </label>
           <label className="flex flex-col">
-            <span>Estoque</span>
+            <span>Estoque total</span>
             <input
               type="number"
               value={value.stock}
-              onChange={(e) => set("stock", Number(e.target.value))}
-              className="rounded border border-neutral-300 px-2 py-1"
+              readOnly
+              title="Calculado a partir do estoque por tamanho"
+              className="rounded border border-neutral-200 bg-neutral-100 px-2 py-1 text-neutral-700"
             />
           </label>
           <ImageUploadField
@@ -840,10 +852,62 @@ function ProductEditForm({
             <span>Tamanhos (csv)</span>
             <input
               value={value.sizes.join(", ")}
-              onChange={(e) => set("sizes", parseCsv(e.target.value))}
+              onChange={(e) => {
+                const sizes = parseCsv(e.target.value);
+                // Keep stockBySize aligned with the size list: drop
+                // entries for sizes that were removed and seed 0 for
+                // newly added ones. Recompute the total in lockstep.
+                const next: Record<string, number> = {};
+                for (const s of sizes) {
+                  next[s] = value.stockBySize?.[s] ?? 0;
+                }
+                onChange({
+                  ...value,
+                  sizes,
+                  stockBySize: next,
+                  stock: sumStockBySize(next),
+                });
+              }}
               className="rounded border border-neutral-300 px-2 py-1"
             />
           </label>
+          {value.sizes.length > 0 && (
+            <div className="col-span-2 flex flex-col gap-2">
+              <span>Estoque por tamanho</span>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {value.sizes.map((s) => (
+                  <label
+                    key={s}
+                    className="flex items-center gap-2 rounded border border-neutral-200 bg-neutral-50 px-2 py-1"
+                  >
+                    <span className="min-w-[3.5rem] text-xs font-semibold uppercase tracking-wider text-neutral-600">
+                      {s}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={value.stockBySize?.[s] ?? 0}
+                      onChange={(e) => {
+                        const qty = Math.max(0, Number(e.target.value) || 0);
+                        const next = { ...(value.stockBySize ?? {}), [s]: qty };
+                        onChange({
+                          ...value,
+                          stockBySize: next,
+                          stock: sumStockBySize(next),
+                        });
+                      }}
+                      className="w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+                    />
+                  </label>
+                ))}
+              </div>
+              <span className="text-xs text-neutral-500">
+                Tamanho com 0 é exibido como esgotado e não entra no
+                carrinho.
+              </span>
+            </div>
+          )}
           <label className="flex flex-col">
             <span>Tags (csv)</span>
             <input

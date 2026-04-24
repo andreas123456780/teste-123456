@@ -45,6 +45,12 @@ type Product struct {
 	Sizes         []string `json:"sizes"`
 	Tags          []string `json:"tags"`
 	Stock         int      `json:"stock"`
+	// StockBySize carries the per-size inventory. The keys match the
+	// labels in Sizes (e.g. "P", "M", "Baby Look"). Missing keys are
+	// treated as 0 (sold out). A fully empty map means the product has
+	// not been migrated yet — the storefront falls back to the legacy
+	// total Stock column for backwards compat.
+	StockBySize map[string]int `json:"stockBySize"`
 }
 
 type CartItem struct {
@@ -97,10 +103,10 @@ type CheckoutResponse struct {
 
 // NAST streetwear · edição limitada — 4 peças.
 var catalog = []Product{
-	{ID: "p-tee-bw-black", Name: "CAMISETA BLACK & WHITE", Description: "Camiseta preta em algodão 30.1 penteado com print cursivo frontal em branco. Corte regular, gola reforçada.", PriceCents: 8990, PixPriceCents: 8541, Category: "Camisetas", Image: "tee-cursive-black.jpg", BackImage: "tee-cursive-black.jpg", Colors: []string{"preto"}, Sizes: []string{"P", "M", "G", "Baby Look"}, Tags: []string{"edição limitada"}, Stock: 24},
-	{ID: "p-tee-bw-white", Name: "CAMISA BLACK & WHITE", Description: "Camiseta branca em algodão 30.1 penteado com print cursivo frontal em preto. Corte regular, gola reforçada.", PriceCents: 8990, PixPriceCents: 8541, Category: "Camisetas", Image: "tee-cursive-white.png", BackImage: "tee-cursive-white.png", Colors: []string{"branco"}, Sizes: []string{"P", "M", "G", "Baby Look"}, Tags: []string{"edição limitada"}, Stock: 24},
-	{ID: "p-boxy-black", Name: "CAMISA BOXY NAST PRETA", Description: "Camiseta boxy preta em algodão pesado 240g com modelagem oversized, ombro caído e etiqueta tecida NAST.", PriceCents: 9990, PixPriceCents: 9491, Category: "Boxy", Image: "boxy-black.jpg", BackImage: "boxy-black.jpg", Colors: []string{"preto"}, Sizes: []string{"P", "M", "G"}, Tags: []string{"boxy fit"}, Stock: 18},
-	{ID: "p-boxy-white", Name: "CAMISETA BOXY NAST BRANCA", Description: "Camiseta boxy branca em algodão pesado 240g com modelagem oversized, ombro caído e etiqueta tecida NAST.", PriceCents: 9990, PixPriceCents: 9491, Category: "Boxy", Image: "boxy-white.jpg", BackImage: "boxy-white.jpg", Colors: []string{"branco"}, Sizes: []string{"P", "M", "G"}, Tags: []string{"boxy fit"}, Stock: 18},
+	{ID: "p-tee-bw-black", Name: "CAMISETA BLACK & WHITE", Description: "Camiseta preta em algodão 30.1 penteado com print cursivo frontal em branco. Corte regular, gola reforçada.", PriceCents: 8990, PixPriceCents: 8541, Category: "Camisetas", Image: "tee-cursive-black.jpg", BackImage: "tee-cursive-black.jpg", Colors: []string{"preto"}, Sizes: []string{"P", "M", "G", "Baby Look"}, Tags: []string{"edição limitada"}, Stock: 24, StockBySize: map[string]int{"P": 6, "M": 6, "G": 6, "Baby Look": 6}},
+	{ID: "p-tee-bw-white", Name: "CAMISA BLACK & WHITE", Description: "Camiseta branca em algodão 30.1 penteado com print cursivo frontal em preto. Corte regular, gola reforçada.", PriceCents: 8990, PixPriceCents: 8541, Category: "Camisetas", Image: "tee-cursive-white.png", BackImage: "tee-cursive-white.png", Colors: []string{"branco"}, Sizes: []string{"P", "M", "G", "Baby Look"}, Tags: []string{"edição limitada"}, Stock: 24, StockBySize: map[string]int{"P": 6, "M": 6, "G": 6, "Baby Look": 6}},
+	{ID: "p-boxy-black", Name: "CAMISA BOXY NAST PRETA", Description: "Camiseta boxy preta em algodão pesado 240g com modelagem oversized, ombro caído e etiqueta tecida NAST.", PriceCents: 9990, PixPriceCents: 9491, Category: "Boxy", Image: "boxy-black.jpg", BackImage: "boxy-black.jpg", Colors: []string{"preto"}, Sizes: []string{"P", "M", "G"}, Tags: []string{"boxy fit"}, Stock: 18, StockBySize: map[string]int{"P": 6, "M": 6, "G": 6}},
+	{ID: "p-boxy-white", Name: "CAMISETA BOXY NAST BRANCA", Description: "Camiseta boxy branca em algodão pesado 240g com modelagem oversized, ombro caído e etiqueta tecida NAST.", PriceCents: 9990, PixPriceCents: 9491, Category: "Boxy", Image: "boxy-white.jpg", BackImage: "boxy-white.jpg", Colors: []string{"branco"}, Sizes: []string{"P", "M", "G"}, Tags: []string{"boxy fit"}, Stock: 18, StockBySize: map[string]int{"P": 6, "M": 6, "G": 6}},
 }
 
 // ----- Rate limiter (token bucket per IP) -----
@@ -679,6 +685,32 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 			if err != nil {
 				log.Printf("checkout: product lookup: %v", err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog unavailable"})
+				return
+			}
+			// Validate that the requested size is actually offered by
+			// the product and that enough inventory is available.
+			// Products migrated with per-size stock enforce the map;
+			// legacy rows (empty StockBySize) fall back to the total.
+			if it.Size != "" && len(p.Sizes) > 0 {
+				sizeOffered := false
+				for _, s := range p.Sizes {
+					if s == it.Size {
+						sizeOffered = true
+						break
+					}
+				}
+				if !sizeOffered {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tamanho indisponível"})
+					return
+				}
+			}
+			if len(p.StockBySize) > 0 {
+				if p.StockBySize[it.Size] < it.Quantity {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tamanho esgotado"})
+					return
+				}
+			} else if p.Stock < it.Quantity {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "estoque insuficiente"})
 				return
 			}
 			unit := p.PriceCents

@@ -11,6 +11,10 @@ export type Product = {
   sizes: string[];
   tags: string[];
   stock: number;
+  /** Per-size inventory. Keys mirror entries in `sizes`. A missing key
+   * means 0 (sold out). An empty map is the legacy shape — callers
+   * should fall back to the total `stock` number. */
+  stockBySize: Record<string, number>;
 };
 
 export type CartItem = {

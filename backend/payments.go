@@ -386,13 +386,13 @@ func decrementOrderStock(ctx context.Context, orders *orderStore, products *prod
 		return
 	}
 	for _, it := range o.Items {
-		rem, err := products.decrementStock(ctx, it.ProductID, it.Quantity)
+		rem, err := products.decrementStockBySize(ctx, it.ProductID, it.Size, it.Quantity)
 		if err != nil {
-			log.Printf("stock: decrement %s qty=%d: %v", it.ProductID, it.Quantity, err)
+			log.Printf("stock: decrement %s size=%q qty=%d: %v", it.ProductID, it.Size, it.Quantity, err)
 			continue
 		}
 		if rem > 0 {
-			log.Printf("stock: oversold product=%s order=%s missing=%d", it.ProductID, orderID, rem)
+			log.Printf("stock: oversold product=%s size=%q order=%s missing=%d", it.ProductID, it.Size, orderID, rem)
 		}
 	}
 }
