@@ -3,9 +3,10 @@ import { useMemo, useState } from "react";
 import type { CartItem } from "../types";
 import { api, type ShippingOption } from "../api";
 import { formatBRL } from "../utils/format";
-import { Close, Minus, Plus, Lock } from "./icons";
+import { Close, Minus, Plus, Lock, WhatsApp } from "./icons";
 import { ProductArt } from "./ProductArt";
 import { ShippingQuote } from "./ShippingQuote";
+import { StripePaymentStep } from "./StripePaymentStep";
 
 type Props = {
   open: boolean;
@@ -14,11 +15,54 @@ type Props = {
   onUpdateQty: (id: string, size: string, color: string, qty: number) => void;
   onRemove: (id: string, size: string, color: string) => void;
   onClear: () => void;
+  whatsAppNumber: string;
 };
+
+// Pix via Stripe is not universally enabled (BR-only, needs CNPJ review
+// in the Stripe dashboard). Until it is, we route Pix checkouts through
+// WhatsApp: the order is still persisted on the backend so we keep the
+// audit trail + stock reservation, but the customer finishes payment by
+// chat with the operator, who manually sends the Pix QR code and later
+// marks the order as paid in /admin.
+function buildPixWhatsAppLink(opts: {
+  phone: string;
+  orderId: string;
+  amountCents: number;
+  items: CartItem[];
+  name: string;
+  zipCode: string;
+  address: string;
+}): string {
+  const lines = [
+    `Olá! Quero finalizar meu pedido NAST #${opts.orderId} via Pix.`,
+    "",
+    "*Itens:*",
+    ...opts.items.map(
+      (it) =>
+        `• ${it.quantity}× ${it.product.name} (${it.size} · ${it.color})`,
+    ),
+    "",
+    `*Total:* ${formatBRL(opts.amountCents)}`,
+    `*Nome:* ${opts.name}`,
+    `*CEP:* ${opts.zipCode}`,
+    `*Endereço:* ${opts.address}`,
+    "",
+    "Por favor, me envie a chave Pix ou o QR Code.",
+  ];
+  return `https://wa.me/${opts.phone}?text=${encodeURIComponent(lines.join("\n"))}`;
+}
 
 type FormState = { name: string; email: string; address: string; zipCode: string };
 
-export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: Props) {
+export function Cart({
+  open,
+  items,
+  onClose,
+  onUpdateQty,
+  onRemove,
+  onClear,
+  whatsAppNumber,
+}: Props) {
   const [form, setForm] = useState<FormState>({
     name: "",
     email: "",
@@ -26,13 +70,40 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     zipCode: "",
   });
   const [loading, setLoading] = useState(false);
-  const [order, setOrder] = useState<{ id: string; total: number } | null>(null);
+  const [order, setOrder] = useState<{
+    id: string;
+    total: number;
+    token: string;
+    method: "pix" | "card";
+    whatsAppHref?: string;
+  } | null>(null);
+  const [payment, setPayment] = useState<
+    | {
+        clientSecret: string;
+        orderId: string;
+        orderToken: string;
+        amountCents: number;
+        method: "pix" | "card";
+      }
+    | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [usePix, setUsePix] = useState(true);
   const [shipping, setShipping] = useState<ShippingOption | null>(null);
+  // Coupon state. `draftCode` is what the user typed; `applied` is the
+  // server-validated result, only used once the user clicks Aplicar.
+  const [draftCode, setDraftCode] = useState("");
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [applied, setApplied] = useState<{
+    code: string;
+    itemDiscountCents: number;
+    shippingDiscountCents: number;
+  } | null>(null);
 
   const handleClose = () => {
     setOrder(null);
+    setPayment(null);
     onClose();
   };
 
@@ -44,9 +115,51 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     () => items.reduce((acc, it) => acc + it.product.pixPriceCents * it.quantity, 0),
     [items],
   );
-  const subtotal = usePix ? totalPix : totalCard;
-  const shippingCents = shipping?.priceCents ?? 0;
+  const rawSubtotal = usePix ? totalPix : totalCard;
+  const rawShippingCents = shipping?.priceCents ?? 0;
+  const itemDiscount = applied?.itemDiscountCents ?? 0;
+  const shippingDiscount = applied?.shippingDiscountCents ?? 0;
+  const subtotal = Math.max(0, rawSubtotal - itemDiscount);
+  const shippingCents = Math.max(0, rawShippingCents - shippingDiscount);
   const total = subtotal + shippingCents;
+
+  // Dropping the shipping selection or emptying the cart invalidates a
+  // previously-applied free-shipping coupon — refresh it so the user
+  // isn't silently given 0 shipping on a cart that no longer qualifies.
+  const applyCoupon = async () => {
+    setCouponError(null);
+    const code = draftCode.trim().toUpperCase();
+    if (!code) return;
+    setCouponLoading(true);
+    try {
+      const res = await api.validateCoupon({
+        code,
+        subtotalCents: rawSubtotal,
+        shippingCents: rawShippingCents,
+      });
+      setApplied({
+        code: res.coupon.code,
+        itemDiscountCents: res.discount.itemDiscountCents,
+        shippingDiscountCents: res.discount.shippingDiscountCents,
+      });
+      setDraftCode(res.coupon.code);
+    } catch (err) {
+      setApplied(null);
+      setCouponError(
+        err instanceof Error
+          ? err.message.replace(/^API \d+: /, "")
+          : "cupom inv\u00e1lido",
+      );
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const removeCoupon = () => {
+    setApplied(null);
+    setCouponError(null);
+    setDraftCode("");
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +167,8 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
     setLoading(true);
     setError(null);
     try {
-      const res = await api.checkout({
+      const method: "pix" | "card" = usePix ? "pix" : "card";
+      const checkoutRes = await api.checkout({
         items: items.map((it) => ({
           productId: it.product.id,
           quantity: it.quantity,
@@ -65,22 +179,71 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
         email: form.email,
         address: form.address,
         zipCode: form.zipCode,
-        paymentMethod: usePix ? "pix" : "card",
+        paymentMethod: method,
+        shipping: shipping
+          ? {
+              serviceId: shipping.serviceId,
+              serviceName: shipping.serviceName,
+              priceCents: shipping.priceCents,
+            }
+          : undefined,
+        couponCode: applied?.code,
       });
-      // Backend only totals product lines; fold in the client-picked shipping
-      // so the confirmation screen matches the pre-checkout total the user saw.
-      setOrder({ id: res.orderId, total: res.totalCents + shippingCents });
-      setShipping(null);
-      onClear();
+      if (method === "pix") {
+        const waHref = buildPixWhatsAppLink({
+          phone: whatsAppNumber,
+          orderId: checkoutRes.orderId,
+          amountCents: checkoutRes.amountCents,
+          items,
+          name: form.name,
+          zipCode: form.zipCode,
+          address: form.address,
+        });
+        // Open WhatsApp in a new tab first (user gesture is still in
+        // scope inside a submit handler), then reveal the confirmation
+        // screen in case the popup is blocked or the user returns.
+        window.open(waHref, "_blank", "noopener,noreferrer");
+        setOrder({
+          id: checkoutRes.orderId,
+          total: checkoutRes.amountCents,
+          token: checkoutRes.orderToken,
+          method: "pix",
+          whatsAppHref: waHref,
+        });
+        setShipping(null);
+        onClear();
+        return;
+      }
+      const intent = await api.createPaymentIntent(checkoutRes.orderId);
+      setPayment({
+        clientSecret: intent.clientSecret,
+        orderId: checkoutRes.orderId,
+        orderToken: checkoutRes.orderToken,
+        amountCents: checkoutRes.amountCents,
+        method,
+      });
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Não foi possível finalizar o pedido. Tente novamente.",
+          : "Não foi possível iniciar o pagamento. Tente novamente.",
       );
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePaid = () => {
+    if (!payment) return;
+    setOrder({
+      id: payment.orderId,
+      total: payment.amountCents,
+      token: payment.orderToken,
+      method: payment.method,
+    });
+    setPayment(null);
+    setShipping(null);
+    onClear();
   };
 
   return (
@@ -123,7 +286,15 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              {order ? (
+              {payment ? (
+                <StripePaymentStep
+                  clientSecret={payment.clientSecret}
+                  amountCents={payment.amountCents}
+                  method={payment.method}
+                  onPaid={handlePaid}
+                  onCancel={() => setPayment(null)}
+                />
+              ) : order ? (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -149,7 +320,9 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                     </svg>
                   </motion.div>
                   <h3 className="mt-6 text-2xl font-black text-white">
-                    Pedido confirmado!
+                    {order.method === "pix"
+                      ? "Pedido reservado!"
+                      : "Pedido confirmado!"}
                   </h3>
                   <p className="mt-2 text-sm text-white/60">
                     Código:{" "}
@@ -161,13 +334,39 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                       {formatBRL(order.total)}
                     </span>
                   </p>
+                  {order.method === "pix" && (
+                    <p className="mt-4 max-w-xs text-xs text-white/70">
+                      Abrimos o WhatsApp pra você finalizar o Pix com o
+                      atendimento. Se a janela não abrir, clique no botão
+                      abaixo.
+                    </p>
+                  )}
+                  {order.method === "pix" && order.whatsAppHref && (
+                    <a
+                      href={order.whatsAppHref}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="mt-6 inline-flex items-center gap-2 bg-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-black hover:bg-white"
+                    >
+                      <WhatsApp className="h-4 w-4" />
+                      Pagar no WhatsApp
+                    </a>
+                  )}
+                  {order.token && (
+                    <a
+                      href={`/pedido/${order.token}`}
+                      className="mt-4 border border-[var(--color-accent)] px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-black"
+                    >
+                      Acompanhar pedido
+                    </a>
+                  )}
                   <motion.button
                     whileHover={{ y: -1 }}
                     onClick={() => {
                       setOrder(null);
                       onClose();
                     }}
-                    className="mt-8 border border-white/20 px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-white hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                    className="mt-4 border border-white/20 px-6 py-3 text-xs font-bold uppercase tracking-[0.3em] text-white hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
                   >
                     Continuar comprando
                   </motion.button>
@@ -273,7 +472,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
               )}
             </div>
 
-            {!order && items.length > 0 && (
+            {!order && !payment && items.length > 0 && (
               <form
                 onSubmit={submit}
                 className="flex flex-col gap-3 border-t border-white/10 px-6 py-4"
@@ -301,7 +500,7 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                             />
                           )}
                           <span className="relative">
-                            {m === "pix" ? "pix -5%" : "cartão"}
+                            {m === "pix" ? "pix (zap) -5%" : "cartão"}
                           </span>
                         </button>
                       );
@@ -348,28 +547,94 @@ export function Cart({ open, items, onClose, onUpdateQty, onRemove, onClear }: P
                   />
                 </div>
 
+                <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
+                  <label className="eyebrow text-white/50">Cupom</label>
+                  {applied ? (
+                    <div className="flex items-center justify-between border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 px-3 py-2">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                          {applied.code}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-[0.25em] text-white/50">
+                          -{formatBRL(applied.itemDiscountCents + applied.shippingDiscountCents)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={removeCoupon}
+                        className="text-[11px] uppercase tracking-[0.25em] text-white/60 hover:text-white"
+                      >
+                        remover
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        inputMode="text"
+                        autoCapitalize="characters"
+                        placeholder="código"
+                        value={draftCode}
+                        onChange={(e) =>
+                          setDraftCode(e.target.value.toUpperCase())
+                        }
+                        className="flex-1 border border-white/15 bg-transparent px-3 py-2 text-sm font-mono uppercase tracking-widest text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyCoupon}
+                        disabled={couponLoading || !draftCode.trim()}
+                        className="border border-white/20 px-4 text-[11px] font-bold uppercase tracking-[0.25em] text-white/80 hover:border-white hover:text-white disabled:opacity-50"
+                      >
+                        {couponLoading ? "..." : "aplicar"}
+                      </button>
+                    </div>
+                  )}
+                  {couponError && (
+                    <div className="text-[11px] text-[var(--color-accent-warn)]">
+                      {couponError}
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-col gap-1 border-t border-white/10 pt-3 text-white">
                   <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-white/50">
                     <span>Subtotal</span>
                     <span className="font-mono text-white/80">
-                      {formatBRL(subtotal)}
+                      {formatBRL(rawSubtotal)}
                     </span>
                   </div>
+                  {applied && itemDiscount > 0 && (
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                      <span>Cupom</span>
+                      <span className="font-mono">
+                        -{formatBRL(itemDiscount)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-white/50">
                     <span>Frete</span>
                     <span className="font-mono text-white/80">
                       {shipping ? formatBRL(shippingCents) : "—"}
                     </span>
                   </div>
+                  {applied && shippingDiscount > 0 && (
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
+                      <span>Frete grátis</span>
+                      <span className="font-mono">
+                        -{formatBRL(shippingDiscount)}
+                      </span>
+                    </div>
+                  )}
                   <div className="mt-1 flex items-center justify-between">
                     <div className="eyebrow text-white/60">Total</div>
                     <div className="text-right">
-                      <div className="text-xl font-black">
+                      <div className="text-xl font-black text-white">
                         {formatBRL(total)}
                       </div>
                       {usePix && totalCard > totalPix && (
                         <div className="text-[11px] text-white/40 line-through">
-                          {formatBRL(totalCard + shippingCents)}
+                          {formatBRL(totalCard + rawShippingCents)}
                         </div>
                       )}
                     </div>

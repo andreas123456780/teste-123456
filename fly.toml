@@ -1,0 +1,54 @@
+# fly.toml — NAST backend + SPA single-image deploy.
+#
+# Create app:
+#   flyctl apps create nast-backend
+#   flyctl volumes create nast_data --size 1 --region gru
+# Set secrets (do NOT check them in):
+#   flyctl secrets set STRIPE_SECRET_KEY=...
+#   flyctl secrets set STRIPE_WEBHOOK_SECRET=...
+#   flyctl secrets set SUPERFRETE_TOKEN=...
+#   flyctl secrets set SUPERFRETE_ORIGIN_ZIP=08503000
+#   flyctl secrets set SUPERFRETE_ENV=production
+#   flyctl secrets set SUPERFRETE_USER_AGENT="NAST (contato@nast.com.br)"
+#   flyctl secrets set ADMIN_TOKEN=...
+#   flyctl secrets set RESEND_API_KEY=...          # optional
+#   flyctl secrets set EMAIL_FROM='NAST <contato@nast.com.br>'
+#   flyctl secrets set APP_URL=https://nast.com.br
+#   flyctl secrets set ALLOWED_ORIGINS=https://nast.com.br
+#   flyctl secrets set ORDER_TOKEN_SECRET=$(openssl rand -hex 32)
+# Deploy:
+#   flyctl deploy
+
+app = "nast-backend"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  DATABASE_PATH = "/data/nast.db"
+
+[[mounts]]
+  source = "nast_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout  = "5s"
+    grace_period = "10s"
+    method   = "get"
+    path     = "/api/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

@@ -1,47 +1,47 @@
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 
-// NAST mark: outer frame + 5-pointed star with an accent square. Reused
-// across the header, loading screen and footer so there's a single source
-// of truth for the brand mark.
-export function NastLogo({ size = 32 }: { size?: number }) {
+// NAST wordmark. Renders the PNG wordmark as a continuously rotating
+// mark — the star sits at the center of the "Nast" word so a 360°
+// rotation reads as brand-forward without spinning individual letters.
+//
+// Honors prefers-reduced-motion: users who opt out see the static
+// wordmark with no animation.
+//
+// Original aspect ratio is 451 × 365 (≈ 1.24). `size` is interpreted as
+// the rendered HEIGHT so callers can keep the existing prop shape.
+const ASPECT = 451 / 365;
+
+export function NastLogo({
+  size = 40,
+  spin = true,
+}: {
+  size?: number;
+  spin?: boolean;
+}) {
+  const prefersReducedMotion = useReducedMotion();
+  const shouldSpin = spin && !prefersReducedMotion;
+  const width = Math.round(size * ASPECT);
   return (
-    <motion.svg
-      width={size}
+    <motion.img
+      src="/brand/logo-nast.png"
+      alt="NAST"
+      width={width}
       height={size}
-      viewBox="0 0 64 64"
-      initial={{ opacity: 0, scale: 0.7 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: "spring", stiffness: 180, damping: 16 }}
-      aria-hidden="true"
-    >
-      <rect
-        x="4"
-        y="4"
-        width="56"
-        height="56"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-      <motion.path
-        d="M32 14 L37.2 27.4 L51.6 28.5 L40.4 37.6 L44.1 51.5 L32 43.8 L19.9 51.5 L23.6 37.6 L12.4 28.5 L26.8 27.4 Z"
-        fill="currentColor"
-        initial={{ scale: 0, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ delay: 0.35, type: "spring", stiffness: 220, damping: 18 }}
-        style={{ transformOrigin: "32px 32px" }}
-      />
-      <motion.rect
-        x="46"
-        y="10"
-        width="6"
-        height="6"
-        fill="var(--color-accent)"
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ delay: 0.9, type: "spring", stiffness: 260 }}
-        style={{ transformOrigin: "49px 13px" }}
-      />
-    </motion.svg>
+      style={{ width, height: size, display: "block" }}
+      // Invert so the black wordmark reads as white on dark backgrounds
+      // without shipping a second asset.
+      className="[filter:invert(1)]"
+      initial={{ opacity: 0, rotate: 0 }}
+      animate={shouldSpin ? { opacity: 1, rotate: 360 } : { opacity: 1 }}
+      transition={
+        shouldSpin
+          ? {
+              opacity: { duration: 0.6 },
+              rotate: { duration: 18, ease: "linear", repeat: Infinity },
+            }
+          : { opacity: { duration: 0.6 } }
+      }
+      draggable={false}
+    />
   );
 }

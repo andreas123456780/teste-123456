@@ -1,5 +1,9 @@
 import { NastLogo } from "./NastLogo";
-import { Instagram, TikTok, WhatsApp } from "./icons";
+import { Instagram, Linktree, WhatsApp } from "./icons";
+
+const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
+const LINKTREE_URL =
+  "https://linktr.ee/nast.comm?utm_source=ig&utm_medium=social&utm_content=link_in_bio";
 
 type Props = { whatsAppNumber?: string };
 
@@ -9,9 +13,8 @@ export function Footer({ whatsAppNumber }: Props = {}) {
     <footer className="relative border-t border-white/10 bg-black/80 px-6 py-16 text-sm text-white/50">
       <div className="mx-auto grid max-w-7xl grid-cols-2 gap-10 md:grid-cols-4">
         <div>
-          <div className="flex items-center gap-3 text-white">
-            <NastLogo size={28} />
-            <span className="text-lg font-black tracking-[0.4em]">NAST</span>
+          <div className="flex items-center text-white">
+            <NastLogo size={44} spin={false} />
           </div>
           <p className="mt-4 text-xs text-white/50">
             Streetwear autoral feito no Brasil. Drops limitados e produção
@@ -34,10 +37,10 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             Ajuda
           </div>
           <ul className="space-y-2">
-            <li>Trocas e devoluções</li>
-            <li>Envio e rastreio</li>
-            <li>Guia de medidas</li>
-            <li>Contato</li>
+            <li><a href="/trocas" className="hover:text-white">Trocas e devoluções</a></li>
+            <li><a href="/trocas#envio" className="hover:text-white">Envio e rastreio</a></li>
+            <li><a href="/privacidade" className="hover:text-white">Privacidade</a></li>
+            <li><a href="/termos" className="hover:text-white">Termos de uso</a></li>
           </ul>
         </div>
         <div>
@@ -47,7 +50,7 @@ export function Footer({ whatsAppNumber }: Props = {}) {
           <ul className="flex items-center gap-3">
             <li>
               <a
-                href="https://instagram.com"
+                href={INSTAGRAM_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center border border-white/15 text-white/60 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
@@ -58,13 +61,13 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             </li>
             <li>
               <a
-                href="https://tiktok.com"
+                href={LINKTREE_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center border border-white/15 text-white/60 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-                aria-label="TikTok"
+                aria-label="Linktree"
               >
-                <TikTok className="h-4 w-4" />
+                <Linktree className="h-4 w-4" />
               </a>
             </li>
             <li>

@@ -125,3 +125,12 @@ export function Boxy(p: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function Linktree(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M12 3v18" />
+      <path d="M5 10l7-7 7 7" />
+      <path d="M5 17l7-7 7 7" />
+    </svg>
+  );
+}

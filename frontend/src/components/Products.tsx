@@ -7,9 +7,24 @@ import { WhatsApp } from "./icons";
 
 type Props = {
   products: Product[];
-  onOpen: (p: Product) => void;
+  onOpen: (p: Product, preferredSize?: string) => void;
   whatsAppNumber: string;
 };
+
+// Size tokens that identify a baby-tee/baby-look variant. Admin registers
+// these under `sizes` (e.g. "Baby Look") so the filter stays data-driven —
+// no product needs to be recategorized to show up under the toggle.
+const BABY_TEE_SIZE_TOKENS = ["baby look", "baby tee", "baby"];
+
+function hasBabyTeeSize(product: Product): string | null {
+  for (const size of product.sizes) {
+    const s = size.toLowerCase();
+    if (BABY_TEE_SIZE_TOKENS.some((t) => s.includes(t))) return size;
+  }
+  return null;
+}
+
+type FitFilter = "regular" | "baby";
 
 export function Products({ products, onOpen, whatsAppNumber }: Props) {
   const categories = useMemo(() => {
@@ -17,19 +32,38 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
     products.forEach((p) => set.add(p.category));
     return ["Todas", ...Array.from(set)];
   }, [products]);
-  const [active, setActive] = useState("Todas");
+  const [activeCategory, setActiveCategory] = useState("Todas");
+  const [fit, setFit] = useState<FitFilter>("regular");
 
-  const filtered = useMemo(
-    () =>
-      active === "Todas"
-        ? products
-        : products.filter((p) => p.category === active),
-    [products, active],
+  const babyCount = useMemo(
+    () => products.filter((p) => hasBabyTeeSize(p) !== null).length,
+    [products],
   );
+  const showBabyToggle = babyCount > 0;
+
+  const filtered = useMemo(() => {
+    const byCategory =
+      activeCategory === "Todas"
+        ? products
+        : products.filter((p) => p.category === activeCategory);
+    if (fit === "baby") {
+      return byCategory.filter((p) => hasBabyTeeSize(p) !== null);
+    }
+    return byCategory;
+  }, [products, activeCategory, fit]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
   )}`;
+
+  const handleOpen = (p: Product) => {
+    if (fit === "baby") {
+      const size = hasBabyTeeSize(p);
+      onOpen(p, size ?? undefined);
+    } else {
+      onOpen(p);
+    }
+  };
 
   return (
     <section id="products" className="relative mx-auto max-w-7xl px-6 py-28">
@@ -50,16 +84,42 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {showBabyToggle && (
+            <div className="flex items-center gap-1 border border-white/15 p-1">
+              {([
+                ["regular", "Boxy"],
+                ["baby", "Baby tee"],
+              ] as const).map(([id, label]) => {
+                const active = fit === id;
+                return (
+                  <motion.button
+                    key={id}
+                    type="button"
+                    onClick={() => setFit(id)}
+                    whileTap={{ scale: 0.96 }}
+                    className={`relative px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.25em] transition ${
+                      active
+                        ? "bg-[var(--color-accent)] text-black"
+                        : "text-white/60 hover:text-white"
+                    }`}
+                    aria-pressed={active}
+                  >
+                    {label}
+                  </motion.button>
+                );
+              })}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {categories.map((c) => (
               <motion.button
                 key={c}
-                onClick={() => setActive(c)}
+                onClick={() => setActiveCategory(c)}
                 whileHover={{ y: -1 }}
                 whileTap={{ scale: 0.96 }}
                 className="relative px-4 py-2 text-[11px] font-bold uppercase tracking-[0.3em]"
               >
-                {active === c && (
+                {activeCategory === c && (
                   <motion.span
                     layoutId="pill"
                     className="absolute inset-0 bg-[var(--color-accent)]"
@@ -67,7 +127,7 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
                   />
                 )}
                 <span
-                  className={`relative ${active === c ? "text-black" : "text-white/60 hover:text-white"}`}
+                  className={`relative ${activeCategory === c ? "text-black" : "text-white/60 hover:text-white"}`}
                 >
                   {c}
                 </span>
@@ -79,6 +139,12 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
           </div>
         </div>
       </motion.div>
+
+      {fit === "baby" && (
+        <div className="mt-6 inline-flex items-center gap-2 border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.25em] text-[var(--color-accent)]">
+          Mostrando só modelos com tamanho baby tee · abre já no tamanho
+        </div>
+      )}
 
       <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -92,10 +158,15 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
                 exit={{ opacity: 0, scale: 0.96 }}
                 transition={{ type: "spring", stiffness: 140, damping: 20 }}
               >
-                <ProductCard product={p} index={i} onOpen={onOpen} />
+                <ProductCard product={p} index={i} onOpen={handleOpen} />
               </motion.div>
             ))}
           </AnimatePresence>
+          {filtered.length === 0 && (
+            <div className="col-span-full border border-white/10 bg-white/5 px-6 py-10 text-center text-sm text-white/60">
+              Nenhum modelo encontrado pro filtro atual.
+            </div>
+          )}
         </div>
 
         <SizeChartPanel />

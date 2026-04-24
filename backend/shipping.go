@@ -1,6 +1,6 @@
 package main
 
-// Melhor Envio integration.
+// SuperFrete integration.
 //
 // Exposes three public-facing concerns for the NAST store:
 //
@@ -8,13 +8,13 @@ package main
 //	                                    zip code and cart (public, rate limited)
 //	POST /api/shipping/label         → purchase and generate a shipping label
 //	                                    (admin only, gated by ADMIN_TOKEN)
-//	GET  /api/shipping/track/:id     → fetch tracking status for an ME order id
+//	GET  /api/shipping/track/:id     → fetch tracking info for a shipment id
 //	                                    (admin only)
 //
 // All outbound calls go through shippingClient, which is environment-aware
-// (sandbox vs production) and injects the token + user agent that Melhor
-// Envio requires. The client is written against the stdlib only so we keep
-// the "zero external deps" posture of the rest of the backend.
+// (sandbox vs production) and injects the token + user agent that
+// SuperFrete requires. The client is written against the stdlib only so we
+// keep the "zero external deps" posture of the rest of the backend.
 
 import (
 	"bytes"
@@ -35,12 +35,15 @@ import (
 // ----- Configuration -----
 
 const (
-	meBaseSandbox = "https://sandbox.melhorenvio.com.br"
-	meBaseProd    = "https://melhorenvio.com.br"
+	superfreteBaseSandbox = "https://sandbox.superfrete.com"
+	superfreteBaseProd    = "https://api.superfrete.com"
 
-	// Conservative per-call timeout. ME calculate typically returns in
-	// <800ms; give generous headroom but fail fast rather than hang.
-	meHTTPTimeout = 8 * time.Second
+	// Conservative per-call timeout. SuperFrete /calculator typically
+	// returns in <1s; give generous headroom but fail fast rather than
+	// hang.
+	superfreteHTTPTimeout = 10 * time.Second
+
+	superfretePlatform = "NAST Streetwear"
 )
 
 // shippingConfig is hydrated from environment variables at startup. If the
@@ -49,27 +52,26 @@ const (
 type shippingConfig struct {
 	BaseURL     string
 	AccessToken string
-	UserAgent   string // ME requires `App (contact@email)` format
-	OriginZip   string // e.g. "01310100"
+	UserAgent   string // SuperFrete requires `App (contact@email)` format
+	OriginZip   string // e.g. "08503000"
 	AdminToken  string // for /label and /track endpoints
 }
 
 func loadShippingConfig() shippingConfig {
-	env := strings.ToLower(strings.TrimSpace(os.Getenv("MELHOR_ENVIO_ENV")))
-	base := meBaseSandbox
-	token := os.Getenv("MELHOR_ENVIO_ACCESS_TOKEN_SANDBOX")
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("SUPERFRETE_ENV")))
+	base := superfreteBaseSandbox
 	if env == "production" || env == "prod" {
-		base = meBaseProd
-		token = os.Getenv("MELHOR_ENVIO_ACCESS_TOKEN")
+		base = superfreteBaseProd
 	}
-	ua := strings.TrimSpace(os.Getenv("MELHOR_ENVIO_USER_AGENT"))
+	token := strings.TrimSpace(os.Getenv("SUPERFRETE_TOKEN"))
+	ua := strings.TrimSpace(os.Getenv("SUPERFRETE_USER_AGENT"))
 	if ua == "" {
 		ua = "NAST Streetwear (contato@nast.example)"
 	}
-	origin := digitsOnly(os.Getenv("MELHOR_ENVIO_ORIGIN_ZIP"))
+	origin := digitsOnly(os.Getenv("SUPERFRETE_ORIGIN_ZIP"))
 	return shippingConfig{
 		BaseURL:     base,
-		AccessToken: strings.TrimSpace(token),
+		AccessToken: token,
 		UserAgent:   ua,
 		OriginZip:   origin,
 		AdminToken:  strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
@@ -78,8 +80,9 @@ func loadShippingConfig() shippingConfig {
 
 // ----- Domain types -----
 
-// ShippingPackage mirrors the subset of the ME "products" payload we need.
-// Dimensions in cm, weight in kg, insurance_value in BRL (float).
+// ShippingPackage is our internal per-item packaging record. It ends up
+// being aggregated into a single `package` envelope on the wire because
+// SuperFrete's calculator expects one combined box.
 type ShippingPackage struct {
 	ID             string  `json:"id"`
 	Width          float64 `json:"width"`
@@ -94,40 +97,44 @@ type shippingAddress struct {
 	PostalCode string `json:"postal_code"`
 }
 
-type shippingOptions struct {
-	Receipt  bool `json:"receipt"`
-	OwnHand  bool `json:"own_hand"`
-	Reverse  bool `json:"reverse"`
-	NonComm  bool `json:"non_commercial"`
-	Insurance bool `json:"insurance_value,omitempty"`
+// sfVolume mirrors the `package` field SuperFrete expects — a single merged
+// box with total dimensions and weight.
+type sfVolume struct {
+	Height float64 `json:"height"`
+	Width  float64 `json:"width"`
+	Length float64 `json:"length"`
+	Weight float64 `json:"weight"`
 }
 
-// meCalculateRequest matches POST /api/v2/me/shipment/calculate.
-type meCalculateRequest struct {
-	From     shippingAddress   `json:"from"`
-	To       shippingAddress   `json:"to"`
-	Products []ShippingPackage `json:"products"`
-	Options  shippingOptions   `json:"options"`
-	Services string            `json:"services,omitempty"`
+type sfCalculatorRequest struct {
+	From     shippingAddress `json:"from"`
+	To       shippingAddress `json:"to"`
+	Package  sfVolume        `json:"package"`
+	Services string          `json:"services,omitempty"`
+	Options  sfOptions       `json:"options"`
 }
 
-// meQuote is a single line returned by ME's calculate endpoint. Some
-// carriers return an `error` string instead of prices — we surface those
-// so the UI can show a reason when a carrier is unavailable.
-type meQuote struct {
-	ID            int             `json:"id"`
-	Name          string          `json:"name"`
-	Price         json.RawMessage `json:"price"`         // sometimes string, sometimes number
-	CustomPrice   json.RawMessage `json:"custom_price"`  // same
-	DeliveryTime  int             `json:"delivery_time"` // business days
+type sfOptions struct {
+	OwnHand           bool    `json:"own_hand"`
+	Receipt           bool    `json:"receipt"`
+	InsuranceValue    float64 `json:"insurance_value"`
+	UseInsuranceValue bool    `json:"use_insurance_value"`
+}
+
+// sfQuote is a single line returned by SuperFrete's calculator endpoint.
+// Some carriers return an `error` string instead of prices — we surface
+// those so the UI can show a reason when a carrier is unavailable.
+type sfQuote struct {
+	ID           int             `json:"id"`
+	Name         string          `json:"name"`
+	Price        json.RawMessage `json:"price"`         // sometimes string, sometimes number
+	CustomPrice  json.RawMessage `json:"custom_price"`  // same
+	Discount     json.RawMessage `json:"discount"`      // discount applied
+	DeliveryTime int             `json:"delivery_time"` // business days
 	DeliveryRange struct {
 		Min int `json:"min"`
 		Max int `json:"max"`
 	} `json:"delivery_range"`
-	CustomDeliveryRange struct {
-		Min int `json:"min"`
-		Max int `json:"max"`
-	} `json:"custom_delivery_range"`
 	Company struct {
 		ID      int    `json:"id"`
 		Name    string `json:"name"`
@@ -148,49 +155,51 @@ type ShippingCartRef struct {
 }
 
 // ShippingQuoteOption is the normalized shape we return to the frontend.
+// Kept stable across the Melhor Envio → SuperFrete swap so the React
+// client doesn't need to branch.
 type ShippingQuoteOption struct {
-	ServiceID    int     `json:"serviceId"`
-	CompanyID    int     `json:"companyId"`
-	CompanyName  string  `json:"companyName"`
-	ServiceName  string  `json:"serviceName"`
-	PriceCents   int     `json:"priceCents"`
-	DeliveryMin  int     `json:"deliveryMinDays"`
-	DeliveryMax  int     `json:"deliveryMaxDays"`
-	Error        string  `json:"error,omitempty"`
+	ServiceID   int    `json:"serviceId"`
+	CompanyID   int    `json:"companyId"`
+	CompanyName string `json:"companyName"`
+	ServiceName string `json:"serviceName"`
+	PriceCents  int    `json:"priceCents"`
+	DeliveryMin int    `json:"deliveryMinDays"`
+	DeliveryMax int    `json:"deliveryMaxDays"`
+	Error       string `json:"error,omitempty"`
 }
 
 // ----- Client -----
 
 type shippingClient struct {
-	cfg    shippingConfig
-	http   *http.Client
+	cfg  shippingConfig
+	http *http.Client
 }
 
 func newShippingClient(cfg shippingConfig) *shippingClient {
 	return &shippingClient{
 		cfg:  cfg,
-		http: &http.Client{Timeout: meHTTPTimeout},
+		http: &http.Client{Timeout: superfreteHTTPTimeout},
 	}
 }
 
-// call issues an authenticated JSON request against ME. On non-2xx the
-// response body is returned in the error so callers can log ME's reason
+// call issues an authenticated JSON request against SuperFrete. On non-2xx
+// the response body is returned in the error so callers can log the reason
 // (without leaking the token).
 func (c *shippingClient) call(ctx context.Context, method, path string, body any, out any) error {
 	if c.cfg.AccessToken == "" {
-		return errors.New("melhor envio token not configured")
+		return errors.New("superfrete token not configured")
 	}
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encode ME request: %w", err)
+			return fmt.Errorf("encode superfrete request: %w", err)
 		}
 		reader = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, reader)
 	if err != nil {
-		return fmt.Errorf("build ME request: %w", err)
+		return fmt.Errorf("build superfrete request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -200,7 +209,7 @@ func (c *shippingClient) call(ctx context.Context, method, path string, body any
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("call ME: %w", err)
+		return fmt.Errorf("call superfrete: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MiB cap
@@ -210,55 +219,67 @@ func (c *shippingClient) call(ctx context.Context, method, path string, body any
 		if len(snippet) > 512 {
 			snippet = snippet[:512] + "…"
 		}
-		return fmt.Errorf("ME %s %s: %d %s", method, path, resp.StatusCode, snippet)
+		return fmt.Errorf("superfrete %s %s: %d %s", method, path, resp.StatusCode, snippet)
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("decode ME response: %w", err)
+		return fmt.Errorf("decode superfrete response: %w", err)
 	}
 	return nil
 }
 
-// Calculate asks ME for quotes for every eligible carrier/service. It is
-// intentionally forgiving: individual carrier failures come back as quotes
-// with `Error` populated — we hand those through instead of failing the
-// whole request.
-func (c *shippingClient) Calculate(ctx context.Context, fromZip, toZip string, products []ShippingPackage) ([]meQuote, error) {
-	req := meCalculateRequest{
-		From:     shippingAddress{PostalCode: digitsOnly(fromZip)},
-		To:       shippingAddress{PostalCode: digitsOnly(toZip)},
-		Products: products,
+// Calculate asks SuperFrete for quotes for every eligible carrier/service.
+// It is intentionally forgiving: individual carrier failures come back as
+// quotes with `Error` populated — we hand those through instead of failing
+// the whole request.
+func (c *shippingClient) Calculate(ctx context.Context, fromZip, toZip string, pkg sfVolume, insuranceValue float64) ([]sfQuote, error) {
+	req := sfCalculatorRequest{
+		From:    shippingAddress{PostalCode: digitsOnly(fromZip)},
+		To:      shippingAddress{PostalCode: digitsOnly(toZip)},
+		Package: pkg,
+		// 1: PAC, 2: SEDEX, 17: Mini Envios — the standard trio for
+		// small-parcel apparel.
+		Services: "1,2,17",
+		Options: sfOptions{
+			InsuranceValue:    insuranceValue,
+			UseInsuranceValue: insuranceValue > 0,
+		},
 	}
-	var quotes []meQuote
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/shipment/calculate", req, &quotes); err != nil {
+	var quotes []sfQuote
+	if err := c.call(ctx, http.MethodPost, "/api/v0/calculator", req, &quotes); err != nil {
 		return nil, err
 	}
 	return quotes, nil
 }
 
-// AddToCart adds a shipment to the authenticated ME cart. Returns the ME
-// order id which is later passed to Checkout + Generate + Track.
+// AddToCart adds a shipment to the authenticated SuperFrete cart. Returns
+// the shipment id which is later passed to Checkout + Generate + Print +
+// order/info.
 func (c *shippingClient) AddToCart(ctx context.Context, body map[string]any) (string, error) {
+	if _, ok := body["platform"]; !ok {
+		body["platform"] = superfretePlatform
+	}
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/cart", body, &out); err != nil {
+	if err := c.call(ctx, http.MethodPost, "/api/v0/cart", body, &out); err != nil {
 		return "", err
 	}
 	if out.ID == "" {
-		return "", errors.New("ME cart response missing id")
+		return "", errors.New("superfrete cart response missing id")
 	}
 	return out.ID, nil
 }
 
-// Checkout purchases one or more ME orders from the authenticated cart. It
-// debits the user's ME wallet, which must have sufficient balance.
+// Checkout purchases one or more SuperFrete shipments from the
+// authenticated cart. It debits the user's SuperFrete wallet, which must
+// have sufficient balance.
 func (c *shippingClient) Checkout(ctx context.Context, orderIDs []string) (json.RawMessage, error) {
 	var out json.RawMessage
 	body := map[string]any{"orders": orderIDs}
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/shipment/checkout", body, &out); err != nil {
+	if err := c.call(ctx, http.MethodPost, "/api/v0/checkout", body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -268,7 +289,7 @@ func (c *shippingClient) Checkout(ctx context.Context, orderIDs []string) (json.
 func (c *shippingClient) Generate(ctx context.Context, orderIDs []string) (json.RawMessage, error) {
 	var out json.RawMessage
 	body := map[string]any{"orders": orderIDs}
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/shipment/generate", body, &out); err != nil {
+	if err := c.call(ctx, http.MethodPost, "/api/v0/generate", body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -278,17 +299,16 @@ func (c *shippingClient) Generate(ctx context.Context, orderIDs []string) (json.
 func (c *shippingClient) Print(ctx context.Context, orderIDs []string, mode string) (json.RawMessage, error) {
 	var out json.RawMessage
 	body := map[string]any{"orders": orderIDs, "mode": mode}
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/shipment/print", body, &out); err != nil {
+	if err := c.call(ctx, http.MethodPost, "/api/v0/print", body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// Tracking returns current status per ME order id.
-func (c *shippingClient) Tracking(ctx context.Context, orderIDs []string) (json.RawMessage, error) {
+// OrderInfo returns tracking code + status for a SuperFrete shipment id.
+func (c *shippingClient) OrderInfo(ctx context.Context, orderID string) (json.RawMessage, error) {
 	var out json.RawMessage
-	body := map[string]any{"orders": orderIDs}
-	if err := c.call(ctx, http.MethodPost, "/api/v2/me/shipment/tracking", body, &out); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/api/v0/order/info/"+orderID, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -296,8 +316,9 @@ func (c *shippingClient) Tracking(ctx context.Context, orderIDs []string) (json.
 
 // ----- Quote cache -----
 
-// Quote cache avoids hammering ME with the same (origin, dest, cart) tuple.
-// Uses a short TTL because rates change and ME has its own rate limits.
+// Quote cache avoids hammering SuperFrete with the same (origin, dest,
+// cart) tuple. Uses a short TTL because rates change and SuperFrete has
+// its own rate limits.
 type quoteCache struct {
 	mu    sync.RWMutex
 	ttl   time.Duration
@@ -373,8 +394,8 @@ func packagingFor(productID string) ShippingPackage {
 	return ShippingPackage{Width: 25, Height: 3, Length: 30, Weight: 0.25, InsuranceValue: 0}
 }
 
-// buildPackages converts cart refs → ME "products" payload. Consolidates by
-// product id so carriers see the right quantity.
+// buildPackages converts cart refs → per-item packaging records. Consolidates
+// by product id so downstream aggregation sees the right quantity.
 func buildPackages(items []ShippingCartRef) ([]ShippingPackage, error) {
 	if len(items) == 0 || len(items) > 50 {
 		return nil, errors.New("invalid item count")
@@ -405,9 +426,36 @@ func buildPackages(items []ShippingCartRef) ([]ShippingPackage, error) {
 	return out, nil
 }
 
+// mergeVolumes consolidates per-item packaging records into a single
+// shipment volume. Weight is summed across all units; the outer box
+// dimensions are the max of each side (reflects "one polybag big enough to
+// hold all pieces"). Total insurance value is summed separately.
+func mergeVolumes(pkgs []ShippingPackage) (sfVolume, float64) {
+	var vol sfVolume
+	var insurance float64
+	for _, p := range pkgs {
+		q := float64(p.Quantity)
+		if q <= 0 {
+			q = 1
+		}
+		vol.Weight += p.Weight * q
+		if p.Width > vol.Width {
+			vol.Width = p.Width
+		}
+		if p.Height > vol.Height {
+			vol.Height = p.Height
+		}
+		if p.Length > vol.Length {
+			vol.Length = p.Length
+		}
+		insurance += p.InsuranceValue * q
+	}
+	return vol, insurance
+}
+
 // ----- Quote normalizer -----
 
-func normalizeQuotes(raw []meQuote) []ShippingQuoteOption {
+func normalizeQuotes(raw []sfQuote) []ShippingQuoteOption {
 	out := make([]ShippingQuoteOption, 0, len(raw))
 	for _, q := range raw {
 		opt := ShippingQuoteOption{
@@ -418,13 +466,6 @@ func normalizeQuotes(raw []meQuote) []ShippingQuoteOption {
 			DeliveryMin: q.DeliveryRange.Min,
 			DeliveryMax: q.DeliveryRange.Max,
 			Error:       q.Error,
-		}
-		// Prefer the seller's custom (possibly longer) promise when they set one.
-		if q.CustomDeliveryRange.Min > 0 {
-			opt.DeliveryMin = q.CustomDeliveryRange.Min
-		}
-		if q.CustomDeliveryRange.Max > 0 {
-			opt.DeliveryMax = q.CustomDeliveryRange.Max
 		}
 		if opt.DeliveryMin == 0 && opt.DeliveryMax == 0 && q.DeliveryTime > 0 {
 			opt.DeliveryMin = q.DeliveryTime
@@ -445,7 +486,7 @@ func normalizeQuotes(raw []meQuote) []ShippingQuoteOption {
 	return out
 }
 
-// parseBRLCents reads ME's price field (which is sometimes a JSON number and
+// parseBRLCents reads a price field (which is sometimes a JSON number and
 // sometimes a string like "12.34") and returns integer cents.
 func parseBRLCents(raw json.RawMessage) (int, bool) {
 	if len(raw) == 0 {
@@ -555,9 +596,10 @@ func handleShippingQuote(c *shippingClient, cache *quoteCache) http.HandlerFunc 
 			writeJSON(w, http.StatusOK, map[string]any{"options": hit, "cached": true})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), meHTTPTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), superfreteHTTPTimeout)
 		defer cancel()
-		raw, err := c.Calculate(ctx, c.cfg.OriginZip, destZip, pkgs)
+		vol, insurance := mergeVolumes(pkgs)
+		raw, err := c.Calculate(ctx, c.cfg.OriginZip, destZip, vol, insurance)
 		if err != nil {
 			log.Printf("shipping.quote error: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "shipping upstream failed"})
@@ -608,7 +650,7 @@ func handleShippingLabel(c *shippingClient) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid cart"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 3*meHTTPTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 3*superfreteHTTPTimeout)
 		defer cancel()
 		orderID, err := c.AddToCart(ctx, req.Cart)
 		if err != nil {
@@ -657,9 +699,9 @@ func handleShippingTrack(c *shippingClient) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), meHTTPTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), superfreteHTTPTimeout)
 		defer cancel()
-		tr, err := c.Tracking(ctx, []string{id})
+		tr, err := c.OrderInfo(ctx, id)
 		if err != nil {
 			log.Printf("shipping.track error: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "tracking upstream failed"})
