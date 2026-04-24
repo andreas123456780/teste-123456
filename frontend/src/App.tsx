@@ -19,6 +19,7 @@ import { ScanIntro } from "./components/ScanIntro";
 import { shouldShowIntro } from "./lib/intro";
 import { WhatsAppButton } from "./components/WhatsAppButton";
 import { InstagramFeed } from "./components/InstagramFeed";
+import { SeoJsonLd } from "./components/SeoJsonLd";
 import { OrderStatus } from "./pages/OrderStatus";
 import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
@@ -229,7 +230,6 @@ function Home() {
         preferredSize={modalPreferredSize}
         onClose={closeModal}
         onAdd={addToCart}
-        whatsAppNumber={WHATSAPP_NUMBER}
       />
       <Cart
         open={cartOpen}
@@ -243,6 +243,7 @@ function Home() {
 
       <WhatsAppButton phone={WHATSAPP_NUMBER} />
       <CookieBanner />
+      <SeoJsonLd products={products} />
       <LoadingScreen show={loading && !introVisible} />
       {introVisible && <ScanIntro onFinish={() => setIntroVisible(false)} />}
     </div>

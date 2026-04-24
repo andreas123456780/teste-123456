@@ -22,6 +22,8 @@ const DEFAULT_SLIDES: Slide[] = [
   { src: "/carousel/lookbook-01.jpg", alt: "NAST lookbook 01" },
   { src: "/carousel/lookbook-02.jpg", alt: "NAST lookbook 02" },
   { src: "/carousel/lookbook-03.jpg", alt: "NAST lookbook 03" },
+  { src: "/carousel/lookbook-04.jpg", alt: "NAST lookbook 04" },
+  { src: "/carousel/lookbook-05.jpg", alt: "NAST lookbook 05" },
 ];
 
 const AUTO_MS = 4500;
