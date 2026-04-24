@@ -285,7 +285,8 @@ export function Cart({
               </motion.button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div className="px-6 py-4">
               {payment ? (
                 <StripePaymentStep
                   clientSecret={payment.clientSecret}
@@ -470,7 +471,7 @@ export function Cart({
                   </AnimatePresence>
                 </ul>
               )}
-            </div>
+              </div>
 
             {!order && !payment && items.length > 0 && (
               <form
@@ -659,6 +660,7 @@ export function Cart({
                 </motion.button>
               </form>
             )}
+            </div>
           </motion.aside>
         </>
       )}
