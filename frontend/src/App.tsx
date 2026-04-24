@@ -154,7 +154,12 @@ function Home() {
   }, [cart]);
 
   const addToCart = useCallback(
-    (product: Product, size: string, color: string) => {
+    (
+      product: Product,
+      size: string,
+      color: string,
+      options?: { openCart?: boolean },
+    ) => {
       setCart((prev) => {
         const key = cartKey(product.id, size, color);
         const idx = prev.findIndex(
@@ -167,7 +172,7 @@ function Home() {
         }
         return [...prev, { product, size, color, quantity: 1 }];
       });
-      setCartOpen(true);
+      if (options?.openCart ?? true) setCartOpen(true);
     },
     [],
   );

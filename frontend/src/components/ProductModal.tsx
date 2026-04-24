@@ -12,7 +12,12 @@ type Props = {
    * filter). Falls back to the product's first size when absent. */
   preferredSize?: string;
   onClose: () => void;
-  onAdd: (p: Product, size: string, color: string) => void;
+  onAdd: (
+    p: Product,
+    size: string,
+    color: string,
+    options?: { openCart?: boolean },
+  ) => void;
 };
 
 function pickInitialSize(
@@ -159,7 +164,7 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
               <motion.button
                 type="button"
                 onClick={() => {
-                  onAdd(product, size, color);
+                  onAdd(product, size, color, { openCart: true });
                   onClose();
                 }}
                 whileHover={{ y: -1 }}
@@ -168,6 +173,19 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
               >
                 <Plus className="h-4 w-4" />
                 Comprar agora
+              </motion.button>
+              <motion.button
+                type="button"
+                onClick={() => {
+                  onAdd(product, size, color, { openCart: false });
+                  onClose();
+                }}
+                whileHover={{ y: -1 }}
+                whileTap={{ scale: 0.98 }}
+                className="mt-2 flex items-center justify-center gap-2 border border-white/20 bg-transparent px-6 py-3.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white transition hover:border-white"
+              >
+                <Plus className="h-4 w-4" />
+                Adicionar à sacola
               </motion.button>
 
               <div className="mt-4 flex items-center justify-between text-[11px] text-white/50">

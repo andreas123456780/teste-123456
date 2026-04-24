@@ -26,7 +26,7 @@ const DEFAULT_SLIDES: Slide[] = [
   { src: "/carousel/lookbook-05.jpg", alt: "NAST lookbook 05" },
 ];
 
-const AUTO_MS = 4500;
+const AUTO_MS = 3000;
 
 // Number of times the slide list is duplicated in the track. Five is enough
 // to give the 3-up viewport two full copies of runway on either side of the
@@ -166,7 +166,7 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
       >
         <div
           ref={trackRef}
-          className="flex transition-transform duration-700 ease-out"
+          className="flex transition-transform duration-[900ms] ease-[cubic-bezier(0.22,0.61,0.36,1)]"
           style={{ transform: `translate3d(${translatePct}%, 0, 0)` }}
         >
           {loop.map((slide, i) => (
