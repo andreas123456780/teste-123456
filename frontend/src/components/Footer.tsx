@@ -1,5 +1,9 @@
 import { NastLogo } from "./NastLogo";
-import { Instagram, TikTok, WhatsApp } from "./icons";
+import { Instagram, Linktree, WhatsApp } from "./icons";
+
+const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
+const LINKTREE_URL =
+  "https://linktr.ee/nast.comm?utm_source=ig&utm_medium=social&utm_content=link_in_bio";
 
 type Props = { whatsAppNumber?: string };
 
@@ -46,7 +50,7 @@ export function Footer({ whatsAppNumber }: Props = {}) {
           <ul className="flex items-center gap-3">
             <li>
               <a
-                href="https://instagram.com"
+                href={INSTAGRAM_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center border border-white/15 text-white/60 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
@@ -57,13 +61,13 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             </li>
             <li>
               <a
-                href="https://tiktok.com"
+                href={LINKTREE_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex h-9 w-9 items-center justify-center border border-white/15 text-white/60 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-                aria-label="TikTok"
+                aria-label="Linktree"
               >
-                <TikTok className="h-4 w-4" />
+                <Linktree className="h-4 w-4" />
               </a>
             </li>
             <li>

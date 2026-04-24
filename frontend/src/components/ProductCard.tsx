@@ -7,7 +7,7 @@ import { formatBRL, pixDiscountPercent } from "../utils/format";
 type Props = {
   product: Product;
   index: number;
-  onOpen: (p: Product) => void;
+  onOpen: (p: Product, preferredSize?: string) => void;
 };
 
 // Streetwear product card: photo on top (white background so the fabric

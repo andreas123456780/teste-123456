@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type Slide = {
   src: string;
@@ -19,62 +26,75 @@ const DEFAULT_SLIDES: Slide[] = [
 
 const AUTO_MS = 4500;
 
-// Three-up carousel: always shows 3 slides side-by-side (2 on tablets, 1 on
-// mobile) and advances by one slide at a time. Wraps around infinitely by
-// rendering the list twice and snapping back when the logical index overflows.
+// Number of times the slide list is duplicated in the track. Five is enough
+// to give the 3-up viewport two full copies of runway on either side of the
+// active window, so we can advance roughly realCount steps before needing
+// to rebase — long enough for the rebase to be imperceptible.
+const COPIES = 5;
+const START_COPY = 2; // index lives in the 3rd copy at rest
+
+// Three-up carousel: shows up to 3 slides side-by-side (2 on tablets, 1 on
+// mobile) and advances by one slide at a time. Infinite loop is implemented
+// by rendering the slide list `COPIES` times and snapping the logical index
+// back to the middle copy whenever it drifts to an edge. The snap runs in a
+// synchronous useLayoutEffect with transitions temporarily disabled, so the
+// rebase never paints an intermediate frame with missing slides.
 export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS }: Props) {
-  const [index, setIndex] = useState(0);
+  const realCount = slides.length;
+  const startIndex = realCount * START_COPY;
+  const [index, setIndex] = useState(startIndex);
   const [paused, setPaused] = useState(false);
   const dragStartX = useRef<number | null>(null);
   const dragDelta = useRef(0);
   const trackRef = useRef<HTMLDivElement | null>(null);
 
-  // Duplicate the list so the last -> first transition doesn't snap visually.
-  const loop = useMemo(() => [...slides, ...slides, ...slides], [slides]);
-  const realCount = slides.length;
+  const loop = useMemo(() => {
+    const out: Slide[] = [];
+    for (let i = 0; i < COPIES; i++) out.push(...slides);
+    return out;
+  }, [slides]);
 
-  const advance = useCallback(
-    (dir: 1 | -1) => {
-      setIndex((prev) => prev + dir);
-    },
-    [],
-  );
+  const advance = useCallback((dir: 1 | -1) => {
+    setIndex((prev) => prev + dir);
+  }, []);
 
   useEffect(() => {
-    if (!autoIntervalMs || paused || slides.length < 2) return;
+    if (!autoIntervalMs || paused || realCount < 2) return;
     const id = window.setInterval(() => advance(1), autoIntervalMs);
     return () => window.clearInterval(id);
-  }, [autoIntervalMs, paused, advance, slides.length]);
+  }, [autoIntervalMs, paused, advance, realCount]);
 
-  // Normalize the logical index so it never drifts unbounded. When the user
-  // idles on the same slide for long, index can grow indefinitely; we rebase
-  // it to the middle copy after it crosses a full list.
-  useEffect(() => {
+  // Rebase the logical index into the middle copy whenever it drifts into
+  // the outermost copies. Runs in useLayoutEffect with the transition
+  // temporarily disabled so the snap paints atomically — the user never
+  // sees the intermediate (out-of-range) frame.
+  useLayoutEffect(() => {
     if (realCount === 0) return;
-    if (index >= realCount * 2 || index < 0) {
-      // Rebase without animation: disable transition on the next frame, reset
-      // index, then re-enable.
-      const track = trackRef.current;
-      if (track) {
-        track.style.transition = "none";
-        window.requestAnimationFrame(() => {
-          setIndex(((index % realCount) + realCount) % realCount + realCount);
-          window.requestAnimationFrame(() => {
-            if (track) track.style.transition = "";
-          });
-        });
-      } else {
-        setIndex(((index % realCount) + realCount) % realCount + realCount);
-      }
+    const minSafe = realCount; // leave one full copy of runway on the left
+    const maxSafe = realCount * (COPIES - 2); // and two copies of runway on the right
+    if (index >= minSafe && index < maxSafe) return;
+
+    const track = trackRef.current;
+    if (track) track.style.transition = "none";
+    const offset = ((index - startIndex) % realCount + realCount) % realCount;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIndex(startIndex + offset);
+    // Re-enable the transition on the next frame so user-driven advances
+    // continue to animate smoothly.
+    if (track) {
+      window.requestAnimationFrame(() => {
+        if (trackRef.current) trackRef.current.style.transition = "";
+      });
     }
-  }, [index, realCount]);
+  }, [index, realCount, startIndex]);
 
-  // Translate so the "current" slide is centered in the viewport; each slide
-  // occupies 1/3 of the viewport on desktop, 1/2 on tablet, full on mobile.
+  // Each slide occupies 1/3 of the flex parent on desktop, so translating
+  // the track by 33.33% per logical step moves exactly one slide. On
+  // narrower breakpoints slides are 1/2 or full-width, so one step reveals
+  // a partial slide — intentional, it hints there's more to come.
   const percentPerSlide = 100 / 3;
-  const translatePct = -(index + realCount) * percentPerSlide;
+  const translatePct = -index * percentPerSlide;
 
-  // Pointer / touch drag support
   const onPointerDown = (e: React.PointerEvent) => {
     dragStartX.current = e.clientX;
     dragDelta.current = 0;
@@ -95,6 +115,9 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
   };
 
   if (slides.length === 0) return null;
+
+  const logicalIndex =
+    realCount === 0 ? 0 : ((index % realCount) + realCount) % realCount;
 
   return (
     <section
@@ -166,13 +189,13 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
 
       <div className="mx-auto mt-6 flex max-w-7xl items-center justify-center gap-2 px-6">
         {slides.map((_, i) => {
-          const active = ((index % realCount) + realCount) % realCount === i;
+          const active = logicalIndex === i;
           return (
             <button
               key={i}
               type="button"
               aria-label={`Ir para slide ${i + 1}`}
-              onClick={() => setIndex(realCount + i)}
+              onClick={() => setIndex(startIndex + i)}
               className={`h-[2px] w-8 transition-colors ${
                 active ? "bg-[var(--color-accent)]" : "bg-white/20"
               }`}

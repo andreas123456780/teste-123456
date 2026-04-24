@@ -1,6 +1,10 @@
 import { motion, useScroll, useTransform } from "framer-motion";
 import { NastLogo } from "./NastLogo";
-import { ShoppingBag } from "./icons";
+import { Instagram, Linktree, ShoppingBag } from "./icons";
+
+const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
+const LINKTREE_URL =
+  "https://linktr.ee/nast.comm?utm_source=ig&utm_medium=social&utm_content=link_in_bio";
 
 type Props = {
   cartCount: number;
@@ -64,26 +68,50 @@ export function Header({ cartCount, onOpenCart }: Props) {
           ))}
         </nav>
 
-        <motion.button
-          onClick={onOpenCart}
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.97 }}
-          className="relative flex items-center gap-2 border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-        >
-          <ShoppingBag className="h-4 w-4" />
-          <span className="hidden sm:inline">Sacola</span>
-          {cartCount > 0 && (
-            <motion.span
-              key={cartCount}
-              initial={{ scale: 0.4, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 500, damping: 20 }}
-              className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-none bg-[var(--color-accent)] px-1.5 text-[11px] font-bold text-black"
-            >
-              {cartCount}
-            </motion.span>
-          )}
-        </motion.button>
+        <div className="flex items-center gap-2">
+          <motion.a
+            href={INSTAGRAM_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Instagram NAST"
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.95 }}
+            className="hidden h-9 w-9 items-center justify-center border border-white/20 text-white/70 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:inline-flex"
+          >
+            <Instagram className="h-4 w-4" />
+          </motion.a>
+          <motion.a
+            href={LINKTREE_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Linktree NAST"
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.95 }}
+            className="hidden h-9 w-9 items-center justify-center border border-white/20 text-white/70 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:inline-flex"
+          >
+            <Linktree className="h-4 w-4" />
+          </motion.a>
+          <motion.button
+            onClick={onOpenCart}
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.97 }}
+            className="relative flex items-center gap-2 border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+          >
+            <ShoppingBag className="h-4 w-4" />
+            <span className="hidden sm:inline">Sacola</span>
+            {cartCount > 0 && (
+              <motion.span
+                key={cartCount}
+                initial={{ scale: 0.4, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-none bg-[var(--color-accent)] px-1.5 text-[11px] font-bold text-black"
+              >
+                {cartCount}
+              </motion.span>
+            )}
+          </motion.button>
+        </div>
       </div>
     </motion.header>
   );

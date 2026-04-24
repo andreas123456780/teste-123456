@@ -95,11 +95,16 @@ export function AdminPage() {
   };
 
   if (!token) {
-    return <LoginForm onLoggedIn={onLoggedIn} />;
+    return (
+      <div className="min-h-screen bg-neutral-50 text-neutral-900">
+        <LoginForm onLoggedIn={onLoggedIn} />
+      </div>
+    );
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <div className="min-h-screen bg-neutral-50 text-neutral-900">
+      <main className="mx-auto max-w-5xl px-6 py-10">
       <header className="mb-6 flex items-center justify-between">
         <h1 className="text-3xl font-bold">NAST — Admin</h1>
         <button
@@ -138,7 +143,8 @@ export function AdminPage() {
       {tab === "dashboard" && <DashboardAdmin token={token} />}
       {tab === "products" && <ProductsAdmin token={token} />}
       {tab === "coupons" && <CouponsAdmin token={token} />}
-    </main>
+      </main>
+    </div>
   );
 }
 
@@ -617,9 +623,9 @@ function ProductEditForm({
   ) => onChange({ ...value, [key]: v });
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl overflow-auto rounded bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-xl font-semibold">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded bg-white p-6 text-neutral-900 shadow-lg">
+        <h2 className="mb-4 text-xl font-semibold text-neutral-900">
           {value.id ? `Editar ${value.id}` : "Novo produto"}
         </h2>
         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -973,9 +979,9 @@ function CouponEditForm({
   ) => onChange({ ...value, [key]: v });
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-xl overflow-auto rounded bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-xl font-semibold">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-auto rounded bg-white p-6 text-neutral-900 shadow-lg">
+        <h2 className="mb-4 text-xl font-semibold text-neutral-900">
           {renaming ? `Editar ${value.code}` : "Novo cupom"}
         </h2>
         <div className="grid grid-cols-2 gap-3 text-sm">

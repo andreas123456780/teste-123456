@@ -8,6 +8,9 @@ import { Close, Plus, WhatsApp } from "./icons";
 
 type Props = {
   product: Product | null;
+  /** Pre-select this size when the modal opens (e.g. from the baby-tee
+   * filter). Falls back to the product's first size when absent. */
+  preferredSize?: string;
   onClose: () => void;
   onAdd: (p: Product, size: string, color: string) => void;
   whatsAppNumber: string;
@@ -22,16 +25,30 @@ const COUPONS: Record<string, number> = {
   BEMVINDO: 5,
 };
 
-export function ProductModal({ product, onClose, onAdd, whatsAppNumber }: Props) {
-  const [size, setSize] = useState<string>(product?.sizes[0] ?? "");
+function pickInitialSize(
+  product: Product | null | undefined,
+  preferred: string | undefined,
+): string {
+  if (!product) return "";
+  if (preferred && product.sizes.includes(preferred)) return preferred;
+  return product.sizes[0] ?? "";
+}
+
+export function ProductModal({ product, preferredSize, onClose, onAdd, whatsAppNumber }: Props) {
+  const [size, setSize] = useState<string>(pickInitialSize(product, preferredSize));
   const [color, setColor] = useState<string>(product?.colors[0] ?? "");
   const [coupon, setCoupon] = useState("");
   const [couponApplied, setCouponApplied] = useState<{ code: string; pct: number } | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
   const [prevProductId, setPrevProductId] = useState(product?.id);
-  if (product && product.id !== prevProductId) {
+  const [prevPreferred, setPrevPreferred] = useState(preferredSize);
+  if (
+    product &&
+    (product.id !== prevProductId || preferredSize !== prevPreferred)
+  ) {
     setPrevProductId(product.id);
-    setSize(product.sizes[0] ?? "");
+    setPrevPreferred(preferredSize);
+    setSize(pickInitialSize(product, preferredSize));
     setColor(product.colors[0] ?? "");
     setCoupon("");
     setCouponApplied(null);

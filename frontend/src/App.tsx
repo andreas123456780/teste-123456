@@ -113,6 +113,18 @@ function Home() {
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
   const [cartOpen, setCartOpen] = useState(false);
   const [modal, setModal] = useState<Product | null>(null);
+  const [modalPreferredSize, setModalPreferredSize] = useState<
+    string | undefined
+  >(undefined);
+
+  const openModal = useCallback((p: Product, preferredSize?: string) => {
+    setModal(p);
+    setModalPreferredSize(preferredSize);
+  }, []);
+  const closeModal = useCallback(() => {
+    setModal(null);
+    setModalPreferredSize(undefined);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -202,7 +214,7 @@ function Home() {
         <HeroCarousel />
         <Products
           products={products}
-          onOpen={setModal}
+          onOpen={openModal}
           whatsAppNumber={WHATSAPP_NUMBER}
         />
         <Story />
@@ -214,7 +226,8 @@ function Home() {
 
       <ProductModal
         product={modal}
-        onClose={() => setModal(null)}
+        preferredSize={modalPreferredSize}
+        onClose={closeModal}
         onAdd={addToCart}
         whatsAppNumber={WHATSAPP_NUMBER}
       />
