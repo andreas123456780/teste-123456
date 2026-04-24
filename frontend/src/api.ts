@@ -131,6 +131,24 @@ export const adminApi = {
       token,
       { method: "DELETE" },
     ),
+  // uploadImage posts a single file as multipart/form-data and returns
+  // the public URL (hosted on Vercel Blob). The browser sets the
+  // multipart boundary automatically when the body is a FormData, so
+  // we must NOT pre-set Content-Type here.
+  uploadImage: async (token: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`${API_BASE}/api/admin/upload`, {
+      method: "POST",
+      headers: { "X-Admin-Token": token },
+      body: fd,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`upload ${res.status}: ${text || res.statusText}`);
+    }
+    return (await res.json()) as { url: string; pathname: string };
+  },
 };
 
 // AdminCouponPayload mirrors the Go adminCouponPayload struct exactly.

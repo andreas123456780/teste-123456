@@ -18,7 +18,10 @@ export function ProductArt({
   className,
   alt = "",
 }: Props) {
-  const src = image.startsWith("/") ? image : `/products/${image}`;
+  const src =
+    /^https?:\/\//.test(image) || image.startsWith("/")
+      ? image
+      : `/products/${image}`;
   return (
     <motion.img
       src={src}
