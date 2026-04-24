@@ -4,7 +4,7 @@ import type { Product } from "../types";
 import { ProductArt } from "./ProductArt";
 import { SizeChartLink } from "./SizeChart";
 import { formatBRL, pixDiscountPercent } from "../utils/format";
-import { Close, Plus, WhatsApp } from "./icons";
+import { Close, Plus } from "./icons";
 
 type Props = {
   product: Product | null;
@@ -12,17 +12,12 @@ type Props = {
    * filter). Falls back to the product's first size when absent. */
   preferredSize?: string;
   onClose: () => void;
-  onAdd: (p: Product, size: string, color: string) => void;
-  whatsAppNumber: string;
-};
-
-// Promo codes the brand honors manually via WhatsApp. The displayed price
-// never changes client-side (the cart and the checkout API don't understand
-// coupons yet), so applying one just prepends the code to the WhatsApp
-// message and shows a confirmation below the input.
-const COUPONS: Record<string, number> = {
-  NAST10: 10,
-  BEMVINDO: 5,
+  onAdd: (
+    p: Product,
+    size: string,
+    color: string,
+    options?: { openCart?: boolean },
+  ) => void;
 };
 
 function pickInitialSize(
@@ -34,12 +29,9 @@ function pickInitialSize(
   return product.sizes[0] ?? "";
 }
 
-export function ProductModal({ product, preferredSize, onClose, onAdd, whatsAppNumber }: Props) {
+export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) {
   const [size, setSize] = useState<string>(pickInitialSize(product, preferredSize));
   const [color, setColor] = useState<string>(product?.colors[0] ?? "");
-  const [coupon, setCoupon] = useState("");
-  const [couponApplied, setCouponApplied] = useState<{ code: string; pct: number } | null>(null);
-  const [couponError, setCouponError] = useState<string | null>(null);
   const [prevProductId, setPrevProductId] = useState(product?.id);
   const [prevPreferred, setPrevPreferred] = useState(preferredSize);
   if (
@@ -50,9 +42,6 @@ export function ProductModal({ product, preferredSize, onClose, onAdd, whatsAppN
     setPrevPreferred(preferredSize);
     setSize(pickInitialSize(product, preferredSize));
     setColor(product.colors[0] ?? "");
-    setCoupon("");
-    setCouponApplied(null);
-    setCouponError(null);
   }
 
   useEffect(() => {
@@ -66,34 +55,6 @@ export function ProductModal({ product, preferredSize, onClose, onAdd, whatsAppN
   const pixPct = product
     ? pixDiscountPercent(product.priceCents, product.pixPriceCents)
     : 0;
-
-  function applyCoupon() {
-    const code = coupon.trim().toUpperCase();
-    if (!code) {
-      setCouponError("Digite um código.");
-      return;
-    }
-    const pct = COUPONS[code];
-    if (!pct) {
-      setCouponError("Cupom inválido.");
-      setCouponApplied(null);
-      return;
-    }
-    setCouponApplied({ code, pct });
-    setCouponError(null);
-  }
-
-  const waText = product
-    ? [
-        `Oi! Quero a ${product.name} (${color}, tam ${size || "—"}). Vi no site da NAST.`,
-        couponApplied ? `Cupom: ${couponApplied.code}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    : "";
-  const waHref = product
-    ? `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(waText)}`
-    : "#";
 
   return (
     <AnimatePresence>
@@ -200,56 +161,23 @@ export function ProductModal({ product, preferredSize, onClose, onAdd, whatsAppN
                 </div>
               </div>
 
-              <div className="mt-5">
-                <div className="eyebrow mb-3 text-white/50">Cupom</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={coupon}
-                    onChange={(e) => {
-                      setCoupon(e.target.value);
-                      setCouponError(null);
-                    }}
-                    placeholder="ex: NAST10"
-                    className="flex-1 border border-white/15 bg-transparent px-3 py-2.5 text-sm uppercase tracking-[0.2em] text-white placeholder-white/30 outline-none transition focus:border-[var(--color-accent)]"
-                  />
-                  <motion.button
-                    type="button"
-                    onClick={applyCoupon}
-                    whileHover={{ y: -1 }}
-                    whileTap={{ scale: 0.97 }}
-                    className="border border-white/20 px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white transition hover:border-white"
-                  >
-                    Aplicar
-                  </motion.button>
-                </div>
-                {couponError && (
-                  <div className="mt-2 text-xs text-[var(--color-accent-warn)]">
-                    {couponError}
-                  </div>
-                )}
-                {couponApplied && (
-                  <div className="mt-2 text-xs text-[var(--color-accent)]">
-                    Cupom {couponApplied.code} · -{couponApplied.pct}% ao
-                    entrar em contato.
-                  </div>
-                )}
-              </div>
-
-              <motion.a
-                href={waHref}
-                target="_blank"
-                rel="noreferrer"
+              <motion.button
+                type="button"
+                onClick={() => {
+                  onAdd(product, size, color, { openCart: true });
+                  onClose();
+                }}
                 whileHover={{ y: -1 }}
                 whileTap={{ scale: 0.98 }}
                 className="mt-8 flex items-center justify-center gap-2 bg-[var(--color-accent)] px-6 py-4 text-xs font-black uppercase tracking-[0.3em] text-black transition hover:bg-white"
               >
-                <WhatsApp className="h-4 w-4" />
-                Entrar em contato
-              </motion.a>
+                <Plus className="h-4 w-4" />
+                Comprar agora
+              </motion.button>
               <motion.button
+                type="button"
                 onClick={() => {
-                  onAdd(product, size, color);
+                  onAdd(product, size, color, { openCart: false });
                   onClose();
                 }}
                 whileHover={{ y: -1 }}

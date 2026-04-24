@@ -7,9 +7,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="NAST — streetwear autoral. Peças limitadas com design minimalista e acabamento premium."
+      content="NAST — streetwear autoral feito no Brasil. Peças limitadas com design minimalista e acabamento premium. Camisetas, boxy fit e baby tee em tiragem pequena."
     />
     <meta name="theme-color" content="#060606" />
+    <link rel="canonical" href="https://nastt.com.br/" />
+
+    <!-- Open Graph / Facebook / WhatsApp link previews -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="NAST" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:url" content="https://nastt.com.br/" />
+    <meta property="og:title" content="NAST — Streetwear autoral" />
+    <meta
+      property="og:description"
+      content="Streetwear autoral feito no Brasil. Peças limitadas com design minimalista e acabamento premium."
+    />
+    <meta property="og:image" content="https://nastt.com.br/brand/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="NAST — streetwear autoral" />
+
+    <!-- Twitter / X card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="NAST — Streetwear autoral" />
+    <meta
+      name="twitter:description"
+      content="Streetwear autoral feito no Brasil. Peças limitadas com design minimalista e acabamento premium."
+    />
+    <meta name="twitter:image" content="https://nastt.com.br/brand/og-image.jpg" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,6 +43,31 @@
       rel="stylesheet"
     />
     <title>NAST — Streetwear autoral</title>
+
+    <!-- Organization schema. ItemList of products is injected dynamically
+         once the catalog is loaded (see SeoJsonLd.tsx). -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "NAST",
+        "url": "https://nastt.com.br/",
+        "logo": "https://nastt.com.br/brand/logo-nast.png",
+        "sameAs": [
+          "https://www.instagram.com/nast.comm/",
+          "https://linktr.ee/nast.comm"
+        ]
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "NAST",
+        "url": "https://nastt.com.br/",
+        "inLanguage": "pt-BR"
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

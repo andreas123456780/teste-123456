@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,9 +21,11 @@ const DEFAULT_SLIDES: Slide[] = [
   { src: "/carousel/lookbook-01.jpg", alt: "NAST lookbook 01" },
   { src: "/carousel/lookbook-02.jpg", alt: "NAST lookbook 02" },
   { src: "/carousel/lookbook-03.jpg", alt: "NAST lookbook 03" },
+  { src: "/carousel/lookbook-04.jpg", alt: "NAST lookbook 04" },
+  { src: "/carousel/lookbook-05.jpg", alt: "NAST lookbook 05" },
 ];
 
-const AUTO_MS = 4500;
+const AUTO_MS = 3000;
 
 // Number of times the slide list is duplicated in the track. Five is enough
 // to give the 3-up viewport two full copies of runway on either side of the
@@ -35,10 +36,11 @@ const START_COPY = 2; // index lives in the 3rd copy at rest
 
 // Three-up carousel: shows up to 3 slides side-by-side (2 on tablets, 1 on
 // mobile) and advances by one slide at a time. Infinite loop is implemented
-// by rendering the slide list `COPIES` times and snapping the logical index
-// back to the middle copy whenever it drifts to an edge. The snap runs in a
-// synchronous useLayoutEffect with transitions temporarily disabled, so the
-// rebase never paints an intermediate frame with missing slides.
+// by rendering the slide list `COPIES` times and re-snapping the logical
+// index back to the middle copy whenever it drifts to an edge. The rebase
+// is deferred until the in-flight transform transition ends, so the slide
+// animation always plays through to completion before the track teleports
+// to its equivalent position — no mid-animation stutter on the wrap frame.
 export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS }: Props) {
   const realCount = slides.length;
   const startIndex = realCount * START_COPY;
@@ -64,29 +66,32 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
     return () => window.clearInterval(id);
   }, [autoIntervalMs, paused, advance, realCount]);
 
-  // Rebase the logical index into the middle copy whenever it drifts into
-  // the outermost copies. Runs in useLayoutEffect with the transition
-  // temporarily disabled so the snap paints atomically — the user never
-  // sees the intermediate (out-of-range) frame.
-  useLayoutEffect(() => {
-    if (realCount === 0) return;
-    const minSafe = realCount; // leave one full copy of runway on the left
-    const maxSafe = realCount * (COPIES - 2); // and two copies of runway on the right
-    if (index >= minSafe && index < maxSafe) return;
+  const needsRebase = (() => {
+    if (realCount === 0) return false;
+    const minSafe = realCount;
+    const maxSafe = realCount * (COPIES - 2);
+    return index < minSafe || index >= maxSafe;
+  })();
 
+  const onTrackTransitionEnd = (e: React.TransitionEvent<HTMLDivElement>) => {
+    // transitionend fires for every animatable property. We only rebase
+    // after the transform animation settles — the one the user actually
+    // sees as "the slide moving".
+    if (e.propertyName !== "transform") return;
+    if (!needsRebase) return;
     const track = trackRef.current;
-    if (track) track.style.transition = "none";
+    if (!track) return;
+    // Snap back to the equivalent position in the centre copy without an
+    // animated transition, so the teleport is imperceptible.
+    track.style.transition = "none";
     const offset = ((index - startIndex) % realCount + realCount) % realCount;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIndex(startIndex + offset);
-    // Re-enable the transition on the next frame so user-driven advances
+    // Restore the transition on the next frame so subsequent advances
     // continue to animate smoothly.
-    if (track) {
-      window.requestAnimationFrame(() => {
-        if (trackRef.current) trackRef.current.style.transition = "";
-      });
-    }
-  }, [index, realCount, startIndex]);
+    window.requestAnimationFrame(() => {
+      if (trackRef.current) trackRef.current.style.transition = "";
+    });
+  };
 
   // Each slide occupies 1/3 of the flex parent on desktop, so translating
   // the track by 33.33% per logical step moves exactly one slide. On
@@ -164,8 +169,9 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
       >
         <div
           ref={trackRef}
-          className="flex transition-transform duration-700 ease-out"
+          className="flex transition-transform duration-[900ms] ease-[cubic-bezier(0.22,0.61,0.36,1)]"
           style={{ transform: `translate3d(${translatePct}%, 0, 0)` }}
+          onTransitionEnd={onTrackTransitionEnd}
         >
           {loop.map((slide, i) => (
             <div
