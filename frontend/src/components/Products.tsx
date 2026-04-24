@@ -11,58 +11,39 @@ type Props = {
   whatsAppNumber: string;
 };
 
-// Size tokens that identify a baby-tee/baby-look variant. Admin registers
-// these under `sizes` (e.g. "Baby Look") so the filter stays data-driven —
-// no product needs to be recategorized to show up under the toggle.
-const BABY_TEE_SIZE_TOKENS = ["baby look", "baby tee", "baby"];
-
-function hasBabyTeeSize(product: Product): string | null {
-  for (const size of product.sizes) {
-    const s = size.toLowerCase();
-    if (BABY_TEE_SIZE_TOKENS.some((t) => s.includes(t))) return size;
-  }
-  return null;
+// Normalize category strings from the API (trim whitespace, title-case)
+// so admin-created variants like "baby look" and "Baby Look" are merged.
+function normalizeCategory(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  return trimmed
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
 }
-
-type FitFilter = "regular" | "baby";
 
 export function Products({ products, onOpen, whatsAppNumber }: Props) {
   const categories = useMemo(() => {
-    const set = new Set<string>();
-    products.forEach((p) => set.add(p.category));
-    return ["Todas", ...Array.from(set)];
+    const seen = new Set<string>();
+    products.forEach((p) => seen.add(normalizeCategory(p.category)));
+    return ["Todas", ...Array.from(seen)];
   }, [products]);
   const [activeCategory, setActiveCategory] = useState("Todas");
-  const [fit, setFit] = useState<FitFilter>("regular");
-
-  const babyCount = useMemo(
-    () => products.filter((p) => hasBabyTeeSize(p) !== null).length,
-    [products],
-  );
-  const showBabyToggle = babyCount > 0;
 
   const filtered = useMemo(() => {
-    const byCategory =
-      activeCategory === "Todas"
-        ? products
-        : products.filter((p) => p.category === activeCategory);
-    if (fit === "baby") {
-      return byCategory.filter((p) => hasBabyTeeSize(p) !== null);
-    }
-    return byCategory;
-  }, [products, activeCategory, fit]);
+    return activeCategory === "Todas"
+      ? products
+      : products.filter(
+          (p) => normalizeCategory(p.category) === activeCategory,
+        );
+  }, [products, activeCategory]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
   )}`;
 
   const handleOpen = (p: Product) => {
-    if (fit === "baby") {
-      const size = hasBabyTeeSize(p);
-      onOpen(p, size ?? undefined);
-    } else {
-      onOpen(p);
-    }
+    onOpen(p);
   };
 
   return (
@@ -84,32 +65,6 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {showBabyToggle && (
-            <div className="flex items-center gap-1 border border-white/15 p-1">
-              {([
-                ["regular", "Boxy"],
-                ["baby", "Baby tee"],
-              ] as const).map(([id, label]) => {
-                const active = fit === id;
-                return (
-                  <motion.button
-                    key={id}
-                    type="button"
-                    onClick={() => setFit(id)}
-                    whileTap={{ scale: 0.96 }}
-                    className={`relative px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.25em] transition ${
-                      active
-                        ? "bg-[var(--color-accent)] text-black"
-                        : "text-white/60 hover:text-white"
-                    }`}
-                    aria-pressed={active}
-                  >
-                    {label}
-                  </motion.button>
-                );
-              })}
-            </div>
-          )}
           <div className="flex flex-wrap gap-2">
             {categories.map((c) => (
               <motion.button
@@ -139,12 +94,6 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
           </div>
         </div>
       </motion.div>
-
-      {fit === "baby" && (
-        <div className="mt-6 inline-flex items-center gap-2 border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.25em] text-[var(--color-accent)]">
-          Mostrando só modelos com tamanho baby tee · abre já no tamanho
-        </div>
-      )}
 
       <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

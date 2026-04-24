@@ -310,9 +310,8 @@ func boolToInt(b bool) int {
 
 // seedProducts upserts the in-code catalog into the DB on every startup.
 // This ensures that image paths, descriptions, prices, and new products
-// from code deployments are always reflected in the database. The upsert
-// uses ON CONFLICT … DO UPDATE so admin-created products (with different
-// IDs) are left untouched.
+// from code deployments are always reflected in the database. Products
+// created via the admin panel (with different IDs) are left untouched.
 func seedProducts(ctx context.Context, s *productsStore, seed []Product) error {
 	for i, p := range seed {
 		pp := p
