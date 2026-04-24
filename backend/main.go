@@ -959,6 +959,7 @@ func main() {
 	mux.HandleFunc("/api/admin/coupons", adminAuthFromCfg(adminCfg, handleAdminCoupons(coupons)))
 	mux.HandleFunc("/api/admin/coupons/", adminAuthFromCfg(adminCfg, handleAdminCouponByCode(coupons)))
 	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
+	mux.HandleFunc("/api/admin/upload", adminAuthFromCfg(adminCfg, handleAdminUpload()))
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 

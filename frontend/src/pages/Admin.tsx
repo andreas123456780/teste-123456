@@ -72,6 +72,129 @@ function parseCsv(value: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// ImageUploadField renders a drag-and-drop / click-to-upload card with a
+// live preview. The underlying value is still the plain URL string, so
+// older products (referencing /products/*.jpg in the repo) keep working
+// — the upload just swaps in the Vercel Blob URL.
+function ImageUploadField({
+  label,
+  value,
+  onChange,
+  token,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  token: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const inputId = `upload-${label.replace(/\W+/g, "-").toLowerCase()}`;
+
+  const preview = value
+    ? value.startsWith("http") || value.startsWith("/")
+      ? value
+      : `/products/${value}`
+    : "";
+
+  const handleFile = async (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Só JPG/PNG/WEBP/GIF.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setError("Arquivo maior que 8 MB.");
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const { url } = await adminApi.uploadImage(token, file);
+      onChange(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha no upload");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm">{label}</span>
+      <label
+        htmlFor={inputId}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f) void handleFile(f);
+        }}
+        className={
+          "flex cursor-pointer flex-col items-center justify-center rounded border-2 border-dashed p-3 text-center text-xs transition " +
+          (dragOver
+            ? "border-black bg-neutral-100"
+            : "border-neutral-300 bg-neutral-50 hover:bg-neutral-100")
+        }
+      >
+        {preview ? (
+          <img
+            src={preview}
+            alt=""
+            className="mb-2 h-28 w-28 rounded object-cover"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.opacity = "0.3";
+            }}
+          />
+        ) : (
+          <div className="mb-2 flex h-28 w-28 items-center justify-center rounded bg-neutral-200 text-2xl text-neutral-400">
+            +
+          </div>
+        )}
+        <span className="text-neutral-700">
+          {uploading ? "Enviando…" : "Clique ou arraste uma imagem"}
+        </span>
+        <input
+          id={inputId}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          disabled={uploading}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            e.target.value = "";
+          }}
+        />
+      </label>
+      {value && (
+        <div className="flex items-center gap-2 text-xs">
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="flex-1 rounded border border-neutral-300 px-2 py-1 font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
+            title="Remover"
+          >
+            Limpar
+          </button>
+        </div>
+      )}
+      {error && <span className="text-xs text-red-600">{error}</span>}
+    </div>
+  );
+}
+
 export function AdminPage() {
   const [token, setToken] = useState<string>(readToken);
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -596,6 +719,7 @@ function ProductsAdmin({ token }: { token: string }) {
           onSave={save}
           onCancel={() => setEditing(null)}
           saving={saving}
+          token={token}
         />
       )}
     </section>
@@ -608,6 +732,7 @@ type ProductEditProps = {
   onSave: () => void;
   onCancel: () => void;
   saving: boolean;
+  token: string;
 };
 
 function ProductEditForm({
@@ -616,6 +741,7 @@ function ProductEditForm({
   onSave,
   onCancel,
   saving,
+  token,
 }: ProductEditProps) {
   const set = <K extends keyof AdminProductPayload>(
     key: K,
@@ -689,22 +815,19 @@ function ProductEditForm({
               className="rounded border border-neutral-300 px-2 py-1"
             />
           </label>
-          <label className="flex flex-col">
-            <span>Imagem (frente)</span>
-            <input
-              value={value.image}
-              onChange={(e) => set("image", e.target.value)}
-              className="rounded border border-neutral-300 px-2 py-1"
-            />
-          </label>
-          <label className="flex flex-col">
-            <span>Imagem (verso)</span>
-            <input
-              value={value.backImage}
-              onChange={(e) => set("backImage", e.target.value)}
-              className="rounded border border-neutral-300 px-2 py-1"
-            />
-          </label>
+          <ImageUploadField
+            label="Imagem (frente)"
+            value={value.image}
+            onChange={(v) => set("image", v)}
+            token={token}
+          />
+          <ImageUploadField
+            label="Imagem (verso)"
+            value={value.backImage}
+            onChange={(v) => set("backImage", v)}
+            token={token}
+          />
+
           <label className="flex flex-col">
             <span>Cores (csv)</span>
             <input
