@@ -308,27 +308,15 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// seedProducts upserts the in-code catalog into the DB on every startup
-// and removes any products whose IDs are not in the catalog. This keeps
-// the code as the single source of truth for the product list.
+// seedProducts upserts the in-code catalog into the DB on every startup.
+// This ensures that image paths, descriptions, prices, and new products
+// from code deployments are always reflected in the database. Products
+// created via the admin panel (with different IDs) are left untouched.
 func seedProducts(ctx context.Context, s *productsStore, seed []Product) error {
-	catalogIDs := make(map[string]bool, len(seed))
 	for i, p := range seed {
 		pp := p
-		catalogIDs[pp.ID] = true
 		if err := s.upsert(ctx, &pp, false, i); err != nil {
 			return err
-		}
-	}
-	rows, err := s.listAdmin(ctx)
-	if err != nil {
-		return err
-	}
-	for _, r := range rows {
-		if !catalogIDs[r.ID] {
-			if err := s.delete(ctx, r.ID); err != nil {
-				return fmt.Errorf("remove stale product %s: %w", r.ID, err)
-			}
 		}
 	}
 	return nil
