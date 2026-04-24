@@ -157,14 +157,14 @@ export function ScanIntro({ onFinish }: Props) {
               Base layer is outlined-only (always visible). Top layer is solid
               white and clipped from the top down, so the fill grows in sync
               with the descending scan line. */}
-          <div className="relative flex select-none items-center justify-center">
-            <div className="relative">
+          <div className="relative flex w-full select-none items-center justify-center px-4">
+            <div className="relative pr-[0.08em]">
               {/* Outline (always visible) */}
               <span
                 aria-hidden="true"
-                className="block font-black leading-none tracking-tighter"
+                className="block font-black leading-none tracking-tight"
                 style={{
-                  fontSize: "clamp(120px, 28vw, 420px)",
+                  fontSize: "clamp(96px, 22vw, 380px)",
                   WebkitTextStroke: "2px rgba(255,255,255,0.35)",
                   color: "transparent",
                 }}
@@ -175,9 +175,9 @@ export function ScanIntro({ onFinish }: Props) {
               {/* Filled + scan-revealed layer */}
               <motion.span
                 aria-hidden="true"
-                className="absolute inset-0 block font-black leading-none tracking-tighter text-white"
+                className="absolute inset-0 block font-black leading-none tracking-tight text-white"
                 style={{
-                  fontSize: "clamp(120px, 28vw, 420px)",
+                  fontSize: "clamp(96px, 22vw, 380px)",
                   textShadow:
                     "0 0 18px rgba(123,211,255,0.35), 0 0 48px rgba(123,211,255,0.15)",
                   clipPath: started
