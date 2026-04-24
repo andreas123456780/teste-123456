@@ -86,9 +86,20 @@ export function Footer({ whatsAppNumber }: Props = {}) {
       </div>
       <div className="mx-auto mt-12 flex max-w-7xl flex-col items-start justify-between gap-3 border-t border-white/10 pt-6 text-[11px] uppercase tracking-[0.25em] text-white/40 md:flex-row md:items-center">
         <div>© {new Date().getFullYear()} NAST — todos os direitos reservados.</div>
-        <div className="flex items-center gap-2">
-          <span className="pulse-dot" />
-          Streetwear autoral
+        <div className="flex items-center gap-4">
+          <a
+            href="https://www.instagram.com/andreasyr_/"
+            target="_blank"
+            rel="noreferrer"
+            className="tracking-[0.25em] text-white/40 transition hover:text-white"
+          >
+            design by @andreasyr
+          </a>
+          <span className="hidden h-3 w-px bg-white/15 md:inline-block" />
+          <div className="flex items-center gap-2">
+            <span className="pulse-dot" />
+            Streetwear autoral
+          </div>
         </div>
       </div>
     </footer>
