@@ -43,7 +43,7 @@ func newTestProducts(t *testing.T, db *sql.DB) *productsStore {
 	store := newProductsStore(db)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := seedProductsIfEmpty(ctx, store, catalog); err != nil {
+	if err := seedProducts(ctx, store, catalog); err != nil {
 		t.Fatalf("seed products: %v", err)
 	}
 	return store
