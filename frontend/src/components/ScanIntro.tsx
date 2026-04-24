@@ -6,11 +6,14 @@ type Props = {
   onFinish: () => void;
 };
 
-// One-shot x-ray scan intro. Plays full animation + synthesized SFX on first
-// visit, then sets a localStorage flag so returning viewers land straight on
-// the site. The audio is gated behind a user gesture because browsers won't
-// play sound on auto-start.
-const LETTERS = ["N", "A", "S", "T"];
+// One-shot scan intro. Full-black canvas; a horizontal scanline descends from
+// the top of the viewport and, in sync, reveals the "NAST" wordmark by growing
+// a clip-path over a solid-white fill layered on top of an outlined version.
+// The audio is gated behind a user gesture because browsers refuse to play
+// sound on auto-start.
+
+const TOTAL_MS = 3200;
+const REVEAL_MS = 2200;
 
 export function ScanIntro({ onFinish }: Props) {
   const reduceMotion = useReducedMotion();
@@ -24,9 +27,8 @@ export function ScanIntro({ onFinish }: Props) {
     window.setTimeout(onFinish, 700);
   }, [onFinish]);
 
-  // Play a synthesized scan SFX: a descending triangle sweep (the "tomography
-  // sweep" timbre) plus a filtered noise tail. We do this in WebAudio so we
-  // don't have to ship a binary asset.
+  // Synthesized scan SFX: descending triangle sweep + band-passed noise + a
+  // confirmation click. WebAudio means no binary asset to ship.
   const playSfx = useCallback(() => {
     try {
       const Ctx =
@@ -38,22 +40,20 @@ export function ScanIntro({ onFinish }: Props) {
       audioRef.current = ctx;
       const now = ctx.currentTime;
 
-      // Sweep oscillator — 1400Hz down to 180Hz over 1.8s.
       const osc = ctx.createOscillator();
       osc.type = "triangle";
       osc.frequency.setValueAtTime(1400, now);
-      osc.frequency.exponentialRampToValueAtTime(180, now + 1.8);
+      osc.frequency.exponentialRampToValueAtTime(180, now + 2.0);
       const oscGain = ctx.createGain();
       oscGain.gain.setValueAtTime(0, now);
       oscGain.gain.linearRampToValueAtTime(0.18, now + 0.05);
-      oscGain.gain.linearRampToValueAtTime(0.18, now + 1.6);
-      oscGain.gain.linearRampToValueAtTime(0, now + 2.0);
+      oscGain.gain.linearRampToValueAtTime(0.18, now + 1.8);
+      oscGain.gain.linearRampToValueAtTime(0, now + 2.2);
       osc.connect(oscGain).connect(ctx.destination);
       osc.start(now);
-      osc.stop(now + 2.1);
+      osc.stop(now + 2.3);
 
-      // Filtered noise — a shimmering hiss that sells the "scanning" feel.
-      const bufferSize = Math.floor(ctx.sampleRate * 2.2);
+      const bufferSize = Math.floor(ctx.sampleRate * 2.4);
       const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = buffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
@@ -64,28 +64,27 @@ export function ScanIntro({ onFinish }: Props) {
       const filter = ctx.createBiquadFilter();
       filter.type = "bandpass";
       filter.frequency.setValueAtTime(900, now);
-      filter.frequency.exponentialRampToValueAtTime(2400, now + 1.8);
+      filter.frequency.exponentialRampToValueAtTime(2400, now + 2.0);
       filter.Q.value = 3;
       const noiseGain = ctx.createGain();
       noiseGain.gain.setValueAtTime(0, now);
       noiseGain.gain.linearRampToValueAtTime(0.08, now + 0.1);
-      noiseGain.gain.linearRampToValueAtTime(0.08, now + 1.6);
-      noiseGain.gain.linearRampToValueAtTime(0, now + 2.1);
+      noiseGain.gain.linearRampToValueAtTime(0.08, now + 1.8);
+      noiseGain.gain.linearRampToValueAtTime(0, now + 2.3);
       noise.connect(filter).connect(noiseGain).connect(ctx.destination);
       noise.start(now);
-      noise.stop(now + 2.2);
+      noise.stop(now + 2.4);
 
-      // Final "confirm" click at the end of the sweep.
       const click = ctx.createOscillator();
       click.type = "square";
       click.frequency.value = 880;
       const clickGain = ctx.createGain();
-      clickGain.gain.setValueAtTime(0, now + 1.9);
-      clickGain.gain.linearRampToValueAtTime(0.12, now + 1.91);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, now + 2.1);
+      clickGain.gain.setValueAtTime(0, now + 2.1);
+      clickGain.gain.linearRampToValueAtTime(0.12, now + 2.11);
+      clickGain.gain.exponentialRampToValueAtTime(0.001, now + 2.3);
       click.connect(clickGain).connect(ctx.destination);
-      click.start(now + 1.9);
-      click.stop(now + 2.1);
+      click.start(now + 2.1);
+      click.stop(now + 2.3);
 
       window.setTimeout(() => {
         try {
@@ -93,7 +92,7 @@ export function ScanIntro({ onFinish }: Props) {
         } catch {
           /* ignore */
         }
-      }, 2400);
+      }, 2500);
     } catch {
       /* audio unavailable, silent intro */
     }
@@ -103,12 +102,12 @@ export function ScanIntro({ onFinish }: Props) {
     (withSound: boolean) => {
       if (withSound) playSfx();
       setStarted(true);
-      window.setTimeout(finish, reduceMotion ? 900 : 3000);
+      window.setTimeout(finish, reduceMotion ? 900 : TOTAL_MS);
     },
     [playSfx, finish, reduceMotion],
   );
 
-  // If the user prefers reduced motion, skip the dramatic scan entirely.
+  // Respect reduced-motion preference: skip the dramatic scan entirely.
   useEffect(() => {
     if (reduceMotion) {
       window.setTimeout(finish, 400);
@@ -132,131 +131,129 @@ export function ScanIntro({ onFinish }: Props) {
           initial={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.7 }}
-          className="fixed inset-0 z-[100] flex flex-col items-center justify-center overflow-hidden bg-[var(--color-bg)]"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center overflow-hidden bg-black"
         >
-          {/* Dim radial vignette behind the skull */}
+          {/* Very faint CRT scanlines across the whole canvas. */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0"
-            style={{
-              background:
-                "radial-gradient(ellipse at 50% 45%, rgba(123,211,255,0.08), transparent 55%)",
-            }}
-          />
-
-          {/* Horizontal CRT scanlines (very faint, always on) */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 opacity-[0.18] mix-blend-overlay"
+            className="pointer-events-none absolute inset-0 opacity-[0.12] mix-blend-overlay"
             style={{
               backgroundImage:
                 "repeating-linear-gradient(0deg, rgba(255,255,255,0.35) 0 1px, transparent 1px 3px)",
             }}
           />
 
-          {/* Skull plate */}
-          <div className="relative flex w-[min(78vw,520px)] max-w-full flex-col items-center">
-            <motion.div
-              className="relative"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: started ? 0.9 : 0.3 }}
-              transition={{ duration: 0.8 }}
-            >
-              <img
-                src="/brand/nast-xray.jpg"
-                alt=""
+          {/* Subtle radial vignette centered on the wordmark. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "radial-gradient(ellipse at 50% 50%, rgba(123,211,255,0.07), transparent 60%)",
+            }}
+          />
+
+          {/* NAST wordmark — the two stacked layers create the reveal effect.
+              Base layer is outlined-only (always visible). Top layer is solid
+              white and clipped from the top down, so the fill grows in sync
+              with the descending scan line. */}
+          <div className="relative flex select-none items-center justify-center">
+            <div className="relative">
+              {/* Outline (always visible) */}
+              <span
                 aria-hidden="true"
-                className="block w-full select-none"
-                draggable={false}
+                className="block font-black leading-none tracking-tighter"
                 style={{
-                  filter: started
-                    ? "contrast(1.15) brightness(1.1) drop-shadow(0 0 24px rgba(123,211,255,0.35))"
-                    : "contrast(0.9) brightness(0.7)",
-                  transition: "filter 1.6s ease",
-                  WebkitMaskImage:
-                    "radial-gradient(ellipse at 50% 50%, black 62%, transparent 78%)",
-                  maskImage:
-                    "radial-gradient(ellipse at 50% 50%, black 62%, transparent 78%)",
+                  fontSize: "clamp(120px, 28vw, 420px)",
+                  WebkitTextStroke: "2px rgba(255,255,255,0.35)",
+                  color: "transparent",
                 }}
-              />
-              {/* Scan line sweeping top → bottom, with halo */}
+              >
+                NAST
+              </span>
+
+              {/* Filled + scan-revealed layer */}
+              <motion.span
+                aria-hidden="true"
+                className="absolute inset-0 block font-black leading-none tracking-tighter text-white"
+                style={{
+                  fontSize: "clamp(120px, 28vw, 420px)",
+                  textShadow:
+                    "0 0 18px rgba(123,211,255,0.35), 0 0 48px rgba(123,211,255,0.15)",
+                  clipPath: started
+                    ? undefined
+                    : "inset(0 0 100% 0)",
+                }}
+                initial={{ clipPath: "inset(0 0 100% 0)" }}
+                animate={
+                  started
+                    ? { clipPath: "inset(0 0 0% 0)" }
+                    : { clipPath: "inset(0 0 100% 0)" }
+                }
+                transition={{
+                  duration: REVEAL_MS / 1000,
+                  ease: "linear",
+                }}
+              >
+                NAST
+              </motion.span>
+
+              {/* Horizontal scan bar descending over the wordmark area */}
               {started && !reduceMotion && (
                 <motion.div
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-x-0 h-[3px]"
                   style={{
                     background:
-                      "linear-gradient(90deg, transparent 0%, rgba(123,211,255,0.9) 50%, transparent 100%)",
+                      "linear-gradient(90deg, transparent 0%, rgba(123,211,255,0.95) 50%, transparent 100%)",
                     boxShadow: "0 0 24px 6px rgba(123,211,255,0.55)",
                   }}
-                  initial={{ top: "-2%" }}
-                  animate={{ top: ["-2%", "102%"] }}
-                  transition={{ duration: 2.2, ease: "linear" }}
+                  initial={{ top: "-4%" }}
+                  animate={{ top: ["-4%", "104%"] }}
+                  transition={{
+                    duration: REVEAL_MS / 1000,
+                    ease: "linear",
+                  }}
                 />
               )}
-              {/* NAST letters reveal, vertically aligned roughly over the spine */}
-              {started && (
-                <div
-                  className="pointer-events-none absolute inset-0 flex flex-col items-center justify-end pb-[8%]"
-                  aria-hidden="true"
-                >
-                  <div className="flex flex-col items-center gap-[2px] font-black leading-none">
-                    {LETTERS.map((ch, i) => (
-                      <motion.span
-                        key={ch}
-                        initial={{ opacity: 0, y: -6, scale: 0.8 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ delay: 0.9 + i * 0.18, duration: 0.25 }}
-                        className="text-[clamp(28px,6vw,56px)] text-white"
-                        style={{
-                          textShadow:
-                            "0 0 6px rgba(123,211,255,0.9), 0 0 18px rgba(123,211,255,0.45)",
-                        }}
-                      >
-                        {ch}
-                      </motion.span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </motion.div>
-
-            {/* Status line */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.25 }}
-              className="mt-6 flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.6em] text-white/60"
-            >
-              <span className="pulse-dot" />
-              {started ? "scaneando" : "scanner · pronto"}
-            </motion.div>
-
-            {/* Start / skip controls */}
-            {!started && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-                className="mt-8 flex flex-col items-center gap-3"
-              >
-                <button
-                  type="button"
-                  onClick={() => start(true)}
-                  className="group relative inline-flex items-center gap-3 border border-[var(--color-accent)] bg-transparent px-6 py-3 text-[11px] font-bold uppercase tracking-[0.4em] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)] hover:text-black"
-                >
-                  iniciar scan
-                </button>
-                <button
-                  type="button"
-                  onClick={() => start(false)}
-                  className="text-[10px] uppercase tracking-[0.4em] text-white/40 transition hover:text-white"
-                >
-                  entrar sem som
-                </button>
-              </motion.div>
-            )}
+            </div>
           </div>
+
+          {/* Status line */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.25 }}
+            className="mt-10 flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.6em] text-white/60"
+          >
+            <span className="pulse-dot" />
+            {started ? "scaneando" : "scanner · pronto"}
+          </motion.div>
+
+          {/* Start / skip controls */}
+          {!started && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="mt-8 flex flex-col items-center gap-3"
+            >
+              <button
+                type="button"
+                onClick={() => start(true)}
+                className="group relative inline-flex items-center gap-3 border border-[var(--color-accent)] bg-transparent px-6 py-3 text-[11px] font-bold uppercase tracking-[0.4em] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)] hover:text-black"
+              >
+                iniciar scan
+              </button>
+              <button
+                type="button"
+                onClick={() => start(false)}
+                className="text-[10px] uppercase tracking-[0.4em] text-white/40 transition hover:text-white"
+              >
+                entrar sem som
+              </button>
+            </motion.div>
+          )}
 
           {/* Skip button — always available once the scan starts */}
           {started && (
@@ -273,5 +270,3 @@ export function ScanIntro({ onFinish }: Props) {
     </AnimatePresence>
   );
 }
-
-

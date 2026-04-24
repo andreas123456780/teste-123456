@@ -5,6 +5,7 @@ import type { CartItem, Product } from "./types";
 
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
+import { HeroCarousel } from "./components/HeroCarousel";
 import { Products } from "./components/Products";
 import { Story } from "./components/Story";
 import { Newsletter } from "./components/Newsletter";
@@ -198,6 +199,7 @@ function Home() {
 
       <main>
         <Hero />
+        <HeroCarousel />
         <Products
           products={products}
           onOpen={setModal}
