@@ -930,7 +930,7 @@ func main() {
 	orders := newOrderStore(db)
 	products := newProductsStore(db)
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := seedProductsIfEmpty(seedCtx, products, catalog); err != nil {
+	if err := seedProducts(seedCtx, products, catalog); err != nil {
 		log.Printf("product seed: %v", err)
 	}
 	seedCancel()

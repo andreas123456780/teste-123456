@@ -308,18 +308,12 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// seedProductsIfEmpty copies the in-code catalog into the DB when the
-// products table has zero rows. This lets a fresh deploy come up with a
-// populated storefront without any manual admin bootstrap step. Once
-// the admin edits any row, this seed is never re-applied.
-func seedProductsIfEmpty(ctx context.Context, s *productsStore, seed []Product) error {
-	rows, err := s.listAdmin(ctx)
-	if err != nil {
-		return err
-	}
-	if len(rows) > 0 {
-		return nil
-	}
+// seedProducts upserts the in-code catalog into the DB on every startup.
+// This ensures that image paths, descriptions, prices, and new products
+// from code deployments are always reflected in the database. The upsert
+// uses ON CONFLICT … DO UPDATE so admin-created products (with different
+// IDs) are left untouched.
+func seedProducts(ctx context.Context, s *productsStore, seed []Product) error {
 	for i, p := range seed {
 		pp := p
 		if err := s.upsert(ctx, &pp, false, i); err != nil {
