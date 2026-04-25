@@ -77,9 +77,13 @@ export function Header({ cartCount, onOpenCart }: Props) {
           {!auth.disabled && !auth.loading && (
             auth.user ? (
               <div className="hidden items-center gap-2 sm:flex">
-                <span className="max-w-[140px] truncate text-xs uppercase tracking-[0.2em] text-white/60">
+                <a
+                  href="/minha-conta"
+                  className="max-w-[160px] truncate border border-white/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                  aria-label="Minha conta"
+                >
                   {firstName(auth.user.name, auth.user.email)}
-                </span>
+                </a>
                 <button
                   type="button"
                   onClick={async () => {

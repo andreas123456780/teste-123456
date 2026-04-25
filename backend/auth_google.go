@@ -100,7 +100,7 @@ func handleGoogleStart(authCfg authConfig, gcfg googleConfig) http.HandlerFunc {
 
 // handleGoogleCallback exchanges the auth code, matches/creates the
 // user, and redirects back to the frontend with a session cookie set.
-func handleGoogleCallback(authCfg authConfig, gcfg googleConfig, users *userStore) http.HandlerFunc {
+func handleGoogleCallback(authCfg authConfig, gcfg googleConfig, users *userStore, orders *orderStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !gcfg.enabled() || !authCfg.enabled() || users == nil {
 			redirectFailure(w, r, gcfg, "unavailable")
@@ -153,6 +153,7 @@ func handleGoogleCallback(authCfg authConfig, gcfg googleConfig, users *userStor
 			redirectFailure(w, r, gcfg, "internal")
 			return
 		}
+		linkLegacyOrders(ctx, orders, user)
 		http.Redirect(w, r, gcfg.PostLoginURL, http.StatusFound)
 	}
 }

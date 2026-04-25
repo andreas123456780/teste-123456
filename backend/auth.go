@@ -278,7 +278,7 @@ func validatePassword(p string) error {
 
 // handleSignup creates a new email/password user, auto-logs-in and
 // returns the profile. Rejects duplicate emails with 409.
-func handleSignup(cfg authConfig, users *userStore) http.HandlerFunc {
+func handleSignup(cfg authConfig, users *userStore, orders *orderStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -334,6 +334,7 @@ func handleSignup(cfg authConfig, users *userStore) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 			return
 		}
+		linkLegacyOrders(ctx, orders, u)
 		writeJSON(w, http.StatusCreated, toAuthMe(u))
 	}
 }
@@ -341,7 +342,7 @@ func handleSignup(cfg authConfig, users *userStore) http.HandlerFunc {
 // handleLogin verifies email+password and issues a session cookie.
 // Always responds 401 on mismatch — never distinguishes "no such
 // email" from "wrong password" to defeat enumeration.
-func handleLogin(cfg authConfig, users *userStore) http.HandlerFunc {
+func handleLogin(cfg authConfig, users *userStore, orders *orderStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -372,6 +373,7 @@ func handleLogin(cfg authConfig, users *userStore) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 			return
 		}
+		linkLegacyOrders(ctx, orders, u)
 		writeJSON(w, http.StatusOK, toAuthMe(u))
 	}
 }
@@ -406,6 +408,21 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toAuthMe(u))
+}
+
+// linkLegacyOrders is a best-effort retroactive attachment of a
+// freshly-authenticated user to orders placed before they had an
+// account (matched by email_lower). Errors are logged and swallowed
+// because the /minha-conta endpoint still falls back to email-match
+// at read time — linking is a performance/consistency optimization,
+// not a correctness requirement.
+func linkLegacyOrders(ctx context.Context, orders *orderStore, u *userAccount) {
+	if orders == nil || u == nil {
+		return
+	}
+	if err := orders.linkOrdersByEmail(ctx, u.ID, strings.ToLower(u.Email)); err != nil {
+		log.Printf("auth: link legacy orders for %s: %v", u.ID, err)
+	}
 }
 
 // issueSession creates a DB row + writes the signed cookie.

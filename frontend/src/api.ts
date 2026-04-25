@@ -141,6 +141,43 @@ export const authApi = {
   googleStartUrl: () => `${API_BASE}/api/auth/google/start`,
 };
 
+// MyOrder mirrors the backend myOrder shape returned by
+// /api/account/orders. Used to render /minha-conta.
+export type MyOrder = {
+  id: string;
+  orderToken?: string;
+  status: string;
+  paymentMethod: string;
+  totalCents: number;
+  shippingCents: number;
+  discountCents?: number;
+  amountCents: number;
+  couponCode?: string;
+  trackingCode?: string;
+  trackingUrl?: string;
+  shippingService?: string;
+  createdAt: string;
+  updatedAt: string;
+  items: Array<{
+    productId: string;
+    productName: string;
+    size?: string;
+    color?: string;
+    quantity: number;
+    unitPriceCents: number;
+  }>;
+};
+
+// accountApi wraps the authenticated /api/account/* surface. All
+// calls require an active session cookie (sent automatically by the
+// base request() helper).
+export const accountApi = {
+  myOrders: () =>
+    request<{ orders: MyOrder[] }>(`/api/account/orders`).then(
+      (r) => r.orders,
+    ),
+};
+
 // Admin API — callers supply the X-Admin-Token header. Token is stored
 // in localStorage client-side (see useAdminToken). Never commit real
 // tokens: operators enter them in the /admin login form.

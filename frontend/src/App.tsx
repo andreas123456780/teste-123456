@@ -26,6 +26,7 @@ import { Terms } from "./pages/Terms";
 import { Returns } from "./pages/Returns";
 import { AdminPage } from "./pages/Admin";
 import { AuthPage } from "./pages/Auth";
+import { MinhaConta } from "./pages/MinhaConta";
 
 const WHATSAPP_NUMBER = "5511910859392";
 const SUPPORT_EMAIL = "contato@nast.com.br";
@@ -44,7 +45,8 @@ type Route =
   | { kind: "returns" }
   | { kind: "admin" }
   | { kind: "login" }
-  | { kind: "signup" };
+  | { kind: "signup" }
+  | { kind: "minha-conta" };
 
 function parseRoute(pathname: string): Route {
   const orderMatch = pathname.match(/^\/pedido\/([^/?#]+)\/?$/);
@@ -66,6 +68,9 @@ function parseRoute(pathname: string): Route {
   }
   if (pathname === "/cadastro" || pathname === "/cadastro/") {
     return { kind: "signup" };
+  }
+  if (pathname === "/minha-conta" || pathname === "/minha-conta/") {
+    return { kind: "minha-conta" };
   }
   return { kind: "home" };
 }
@@ -112,6 +117,9 @@ function App() {
   }
   if (route.kind === "admin") {
     return <AdminPage />;
+  }
+  if (route.kind === "minha-conta") {
+    return <MinhaConta whatsAppNumber={WHATSAPP_NUMBER} />;
   }
   if (route.kind === "login" || route.kind === "signup") {
     // Preserve ?next=/some/path so the auth page sends the user back
