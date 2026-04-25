@@ -39,7 +39,7 @@ No other dependencies are required.
    | `ORDER_TOKEN_SECRET` | optional | defaults to hash of `STRIPE_SECRET_KEY` |
    | `CRON_SECRET` | yes (Vercel cron) | 32+ random bytes; shared secret the SuperFrete retry cron uses to authenticate. `openssl rand -hex 32`. |
    | `INTERNAL_JOB_TOKEN` | optional | alias for `CRON_SECRET`. Set one *or* the other. |
-   | `LABEL_PROCESSING_TIMEOUT` | optional | Go duration for a single SuperFrete pipeline call (default `25s`). Keep below the function `maxDuration` in `backend/vercel.json`. |
+   | `LABEL_PROCESSING_TIMEOUT` | recommended | Go duration. Must stay **below Vercel's function `maxDuration`**. Hobby plan default is 10s, so set `8s`. Pro plan can go up to 60s — set `50s`. |
 
 5. **Don't deploy yet** — provision the database first so `DATABASE_URL`
    is injected automatically on the first build.
