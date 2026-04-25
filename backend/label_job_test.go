@@ -141,7 +141,7 @@ func TestRunLabelJob_HappyPath(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := runLabelJob(ctx, store, ship, "ord_happy"); err != nil {
+	if err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_happy", labelOverrides{}); err != nil {
 		t.Fatalf("runLabelJob: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestRunLabelJob_IdempotentSkip(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
 
-	if err := runLabelJob(ctx, store, ship, "ord_done"); err != nil {
+	if err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_done", labelOverrides{}); err != nil {
 		t.Fatalf("runLabelJob on already-tracked order: %v", err)
 	}
 	if atomic.LoadInt32(&fs.cartCalls) != 0 {
@@ -201,7 +201,7 @@ func TestRunLabelJob_CheckoutFailureRecordsAttempt(t *testing.T) {
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
 
 	ctx := context.Background()
-	err := runLabelJob(ctx, store, ship, "ord_fail")
+	err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_fail", labelOverrides{})
 	if err == nil {
 		t.Fatal("expected error from runLabelJob, got nil")
 	}
@@ -231,7 +231,7 @@ func TestRunLabelJob_OrderNotFound(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{BaseURL: "http://unused", AccessToken: "tok", OriginZip: "08503000"})
-	err := runLabelJob(context.Background(), store, ship, "ord_missing")
+	err := runLabelJob(context.Background(), store, ship, defaultFakeViaCep(t), "ord_missing", labelOverrides{})
 	if err == nil {
 		t.Fatal("expected error for unknown order")
 	}
@@ -241,7 +241,7 @@ func TestRunLabelJob_ShippingNotConfigured(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{}) // no AccessToken
-	if err := runLabelJob(context.Background(), store, ship, "anything"); err == nil {
+	if err := runLabelJob(context.Background(), store, ship, defaultFakeViaCep(t), "anything", labelOverrides{}); err == nil {
 		t.Fatal("expected error when SuperFrete unconfigured")
 	}
 }
@@ -255,7 +255,7 @@ func TestRunLabelJob_SkipsUnpaidOrder(t *testing.T) {
 	srv := fs.start()
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
-	if err := runLabelJob(context.Background(), store, ship, "ord_pending"); err != nil {
+	if err := runLabelJob(context.Background(), store, ship, defaultFakeViaCep(t), "ord_pending", labelOverrides{}); err != nil {
 		t.Fatalf("runLabelJob: %v", err)
 	}
 	if atomic.LoadInt32(&fs.cartCalls) != 0 {
@@ -274,6 +274,7 @@ func TestSyncLabelDispatcher_RunsSynchronously(t *testing.T) {
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
 
 	d := newSyncLabelDispatcher(store, ship, 5*time.Second)
+	d.viacep = defaultFakeViaCep(t)
 	d.Enqueue("ord_sync") // returns only after the SuperFrete pipeline finishes
 
 	if atomic.LoadInt32(&fs.cartCalls) == 0 {
@@ -388,6 +389,72 @@ func TestLabelBackoff_Monotonic(t *testing.T) {
 	}
 	if labelBackoff(20) > time.Hour {
 		t.Fatalf("backoff(20) = %v exceeds cap", labelBackoff(20))
+	}
+}
+
+// TestRunLabelJob_SendsDistrictCityStateToSuperFrete guards against
+// the exact regression that first caused this work: SuperFrete rejects
+// cart payloads that don't include recipient district/city/state. The
+// fields get resolved either from overrides or a ViaCEP lookup against
+// the order's zip — this test wires up both and asserts the payload.
+func TestRunLabelJob_SendsDistrictCityStateToSuperFrete(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_addr")
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+
+	viacep := newFakeViaCep(t, addressDetails{District: "Jardim América", City: "Suzano", State: "SP"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runLabelJob(ctx, store, ship, viacep, "ord_addr", labelOverrides{}); err != nil {
+		t.Fatalf("runLabelJob: %v", err)
+	}
+	if len(fs.cartCapturedFields) != 1 {
+		t.Fatalf("expected exactly one cart call, got %d", len(fs.cartCapturedFields))
+	}
+	to, _ := fs.cartCapturedFields[0]["to"].(map[string]any)
+	if to == nil {
+		t.Fatal("cart payload missing 'to' object")
+	}
+	if got, _ := to["district"].(string); got != "Jardim América" {
+		t.Fatalf("to.district = %q, want Jardim América", got)
+	}
+	if got, _ := to["city"].(string); got != "Suzano" {
+		t.Fatalf("to.city = %q, want Suzano", got)
+	}
+	if got, _ := to["state_abbr"].(string); got != "SP" {
+		t.Fatalf("to.state_abbr = %q, want SP", got)
+	}
+}
+
+// TestRunLabelJob_NameOverrideReachesSuperFrete covers the manual-
+// recovery path where an operator retries a stuck order with a
+// corrected recipient name (SuperFrete rejects first-name-only).
+func TestRunLabelJob_NameOverrideReachesSuperFrete(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_name")
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_name", labelOverrides{
+		Name: "João da Silva Santos",
+	})
+	if err != nil {
+		t.Fatalf("runLabelJob: %v", err)
+	}
+	to, _ := fs.cartCapturedFields[0]["to"].(map[string]any)
+	if got, _ := to["name"].(string); got != "João da Silva Santos" {
+		t.Fatalf("to.name = %q, override ignored", got)
 	}
 }
 

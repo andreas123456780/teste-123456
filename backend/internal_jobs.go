@@ -80,7 +80,10 @@ type processLabelsResult struct {
 // tracking_code and tries to generate a label for each, with backoff
 // between attempts. It is safe to call concurrently — runLabelJob is
 // idempotent and the DB serialises the writes.
-func handleProcessLabelsJob(cfg internalJobsConfig, orders *orderStore, ship *shippingClient) http.HandlerFunc {
+func handleProcessLabelsJob(cfg internalJobsConfig, orders *orderStore, ship *shippingClient, viacep *viaCepClient) http.HandlerFunc {
+	if viacep == nil {
+		viacep = newViaCepClient()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -125,7 +128,7 @@ func handleProcessLabelsJob(cfg internalJobsConfig, orders *orderStore, ship *sh
 				continue
 			}
 			oneCtx, oneCancel := context.WithTimeout(ctx, perOrder)
-			err := runLabelJob(oneCtx, orders, ship, o.ID)
+			err := runLabelJob(oneCtx, orders, ship, viacep, o.ID, labelOverrides{})
 			oneCancel()
 			if err != nil {
 				out.Failed++

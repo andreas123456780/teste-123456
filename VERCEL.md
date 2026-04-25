@@ -82,6 +82,30 @@ the list of paid orders that don't yet have a tracking code, along
 with the latest error and attempt count. You can also re-trigger a
 single order manually with `POST /api/admin/orders/{orderId}/retry-label`.
 
+The retry endpoint accepts an **optional** JSON body to patch the
+recipient before re-running the pipeline. Useful when SuperFrete
+rejected the original payload (e.g. the customer typed only a first
+name). All fields are optional; blanks fall back to the stored order
+plus a ViaCEP lookup against the stored zip:
+
+```bash
+curl -X POST \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"João da Silva Santos"}' \
+  https://<backend>/api/admin/orders/ord_xxx/retry-label
+```
+
+### ViaCEP enrichment
+
+SuperFrete requires the recipient's district (bairro), city, and UF —
+but the legacy checkout form captured only a single free-text address
+line plus a zip code. Before every call to SuperFrete the backend now
+hits `https://viacep.com.br/ws/{cep}/json/` and merges the result into
+the cart payload. The lookup is free, unauthenticated, and behind a
+3-second timeout so it can't stall the webhook budget. Operator
+overrides in the retry body always win.
+
 ### Provisioning Postgres
 
 In the backend project: **Storage → Add Database → Postgres** (Neon-

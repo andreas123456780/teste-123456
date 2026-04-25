@@ -14,7 +14,7 @@ func TestInternalJobsAuth_Disabled503(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "x", BaseURL: "http://unused"})
-	h := handleProcessLabelsJob(internalJobsConfig{}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	h(rr, httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil))
@@ -27,7 +27,7 @@ func TestInternalJobsAuth_MissingBearer(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "x", BaseURL: "http://unused"})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	h(rr, httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil))
@@ -40,7 +40,7 @@ func TestInternalJobsAuth_WrongToken(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "x", BaseURL: "http://unused"})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil)
@@ -56,7 +56,7 @@ func TestInternalJobsShippingUnconfigured503(t *testing.T) {
 	defer cleanup()
 	// shipping client without AccessToken
 	ship := newShippingClient(shippingConfig{})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil)
@@ -83,7 +83,7 @@ func TestProcessLabelsJob_HappyPath(t *testing.T) {
 	ship := newShippingClient(shippingConfig{
 		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000",
 	})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil)
@@ -129,7 +129,7 @@ func TestProcessLabelsJob_SkipsRecentFailures(t *testing.T) {
 	ship := newShippingClient(shippingConfig{
 		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000",
 	})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/jobs/process-labels", nil)
@@ -154,7 +154,7 @@ func TestProcessLabelsJob_MethodNotAllowed(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "x", BaseURL: "http://unused"})
-	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship)
+	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/internal/jobs/process-labels", nil)
 	req.Header.Set("Authorization", "Bearer secret")

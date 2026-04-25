@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,7 +96,7 @@ func TestAdminRetryLabel_Success(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_retry/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -114,6 +115,52 @@ func TestAdminRetryLabel_Success(t *testing.T) {
 	}
 }
 
+func TestAdminRetryLabel_WithNameOverride(t *testing.T) {
+	// Verifies that a JSON body {"name":"..."} passed to the retry
+	// endpoint propagates all the way to the SuperFrete cart payload.
+	// This is the exact recovery path used for orders where the
+	// customer entered only a first name at checkout.
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_override")
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_override/retry-label",
+		strings.NewReader(`{"name":"João Silva Santos"}`))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	to, _ := fs.cartCapturedFields[0]["to"].(map[string]any)
+	if got, _ := to["name"].(string); got != "João Silva Santos" {
+		t.Fatalf("name override lost: to.name = %q", got)
+	}
+}
+
+func TestAdminRetryLabel_InvalidJSON(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_badjson")
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_badjson/retry-label",
+		strings.NewReader(`{"name": bad}`))
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed body, got %d", rr.Code)
+	}
+}
+
 func TestAdminRetryLabel_Failure(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
@@ -125,7 +172,7 @@ func TestAdminRetryLabel_Failure(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_retry_fail/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -139,7 +186,7 @@ func TestAdminRetryLabel_UnknownAction(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_x/bogus", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -153,7 +200,7 @@ func TestAdminRetryLabel_MethodNotAllowed(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_x/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")
