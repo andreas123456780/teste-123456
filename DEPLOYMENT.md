@@ -40,6 +40,8 @@ Todas são setadas via `flyctl secrets set`. Nenhuma é commitada.
 | `RESEND_API_KEY` | opcional | Sem ela os e-mails são pulados |
 | `EMAIL_FROM` | opcional | `NAST <contato@nast.com.br>` |
 | `TRUSTED_PROXIES` | opcional | CIDRs dos proxies da Fly/CF |
+| `CRON_SECRET` / `INTERNAL_JOB_TOKEN` | opcional em Fly | Segredo do endpoint `/api/internal/jobs/process-labels`. Obrigatório em Vercel (ver `VERCEL.md`); em Fly dá pra deixar vazio e confiar na chamada síncrona do webhook — a rota fica 503 e não roda. |
+| `LABEL_PROCESSING_TIMEOUT` | opcional | Duração Go (default `25s`). Tempo máximo que o webhook Stripe fica bloqueado chamando SuperFrete. Em Fly.io pode subir pra `60s`. |
 | `VITE_STRIPE_PUBLISHABLE_KEY` | sim | **Build-arg**, não runtime |
 
 > O `VITE_STRIPE_PUBLISHABLE_KEY` é lido pelo Vite na hora do

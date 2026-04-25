@@ -37,9 +37,34 @@ No other dependencies are required.
    | `RESEND_API_KEY` | optional | `re_...` if confirmation emails are enabled |
    | `EMAIL_FROM` | optional | `NAST <contato@nast.com.br>` |
    | `ORDER_TOKEN_SECRET` | optional | defaults to hash of `STRIPE_SECRET_KEY` |
+   | `CRON_SECRET` | yes (Vercel cron) | 32+ random bytes; shared secret the SuperFrete retry cron uses to authenticate. `openssl rand -hex 32`. |
+   | `INTERNAL_JOB_TOKEN` | optional | alias for `CRON_SECRET`. Set one *or* the other. |
+   | `LABEL_PROCESSING_TIMEOUT` | optional | Go duration for a single SuperFrete pipeline call (default `25s`). Keep below the function `maxDuration` in `backend/vercel.json`. |
 
 5. **Don't deploy yet** — provision the database first so `DATABASE_URL`
    is injected automatically on the first build.
+
+### Why `CRON_SECRET` matters on Vercel
+
+Vercel functions are killed the instant the HTTP response is flushed,
+which means background goroutines never run. The Stripe webhook now
+generates the SuperFrete label synchronously, but if SuperFrete happens
+to be slow the function may time out before a `tracking_code` is
+saved. To catch those, `backend/vercel.json` schedules a 5-minute cron
+against `/api/internal/jobs/process-labels` — that endpoint scans
+`status='paid' AND tracking_code IS NULL` and retries each pending
+order with exponential backoff.
+
+Vercel Cron authenticates itself by sending `Authorization: Bearer
+$CRON_SECRET`. Set that env var and the cron auto-authenticates; leave
+it empty and the endpoint returns 503 so nothing runs accidentally.
+
+### Inspecting stuck orders
+
+`GET /api/admin/orders/pending-labels` (auth: `X-Admin-Token`) returns
+the list of paid orders that don't yet have a tracking code, along
+with the latest error and attempt count. You can also re-trigger a
+single order manually with `POST /api/admin/orders/{orderId}/retry-label`.
 
 ### Provisioning Postgres
 

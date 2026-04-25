@@ -1,107 +1,113 @@
 package main
 
-// Async SuperFrete label generation.
+// SuperFrete label generation.
 //
-// Stripe webhooks have a 15s delivery budget; the full SuperFrete label
-// flow (cart → checkout → generate → print) is ~5-10s of synchronous
-// HTTP on a good day, well north of that when SuperFrete is slow. We
-// fire-and-forget: the webhook handler enqueues the order id, a single
-// worker goroutine drains the channel and runs the steps against a
-// fresh context with its own timeout.
+// Original design: the Stripe webhook handler called Enqueue on a
+// goroutine-backed labelWorker. That goroutine survives only as long
+// as the OS process — fine on Fly.io, broken on Vercel/Cloud Run/any
+// serverless platform that suspends the function as soon as the HTTP
+// response is flushed.
 //
-// If the goroutine falls behind (channel full) we log and drop — the
-// admin can manually call /api/shipping/label later. We do NOT retry
-// automatically here; the retry policy for SuperFrete is out of scope
-// for this service and is better handled by a proper job queue.
+// New design: every code path that wants a label calls runLabelJob
+// synchronously. The function is idempotent (skips orders that
+// already have a tracking_code) and bookkeeping (attempts + last
+// error) lives in the orders table so a cron-driven worker can pick
+// up failures with backoff. See internal_jobs.go for that worker.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"time"
 )
 
-// labelWorker is a labelEnqueuer (see payments.go) backed by a single
-// goroutine and a buffered channel.
-type labelWorker struct {
-	orders *orderStore
-	ship   *shippingClient
-	queue  chan string
+// syncLabelDispatcher implements labelEnqueuer by running runLabelJob
+// synchronously inside Enqueue. The webhook handler thus blocks on the
+// SuperFrete pipeline before returning 200 to Stripe — which is the
+// only design that survives serverless platforms (Vercel, Cloud Run)
+// where goroutines die with the function. Errors are recorded against
+// the order and a fallback cron sweep retries with backoff.
+type syncLabelDispatcher struct {
+	orders  *orderStore
+	ship    *shippingClient
+	timeout time.Duration
 }
 
-// newLabelWorker starts the worker goroutine and returns a handle. When
-// ship or orders is nil it returns a no-op worker so the rest of the
-// service can boot without SuperFrete configured.
-func newLabelWorker(orders *orderStore, ship *shippingClient) *labelWorker {
-	w := &labelWorker{
-		orders: orders,
-		ship:   ship,
-		queue:  make(chan string, 256),
+func newSyncLabelDispatcher(orders *orderStore, ship *shippingClient, timeout time.Duration) *syncLabelDispatcher {
+	if timeout <= 0 {
+		timeout = 25 * time.Second
 	}
-	go w.run()
-	return w
+	return &syncLabelDispatcher{orders: orders, ship: ship, timeout: timeout}
 }
 
-// Enqueue implements labelEnqueuer. Non-blocking; logs if the channel is
-// full so operations can alert on backpressure.
-func (w *labelWorker) Enqueue(orderID string) {
-	if w == nil || w.ship == nil || orderID == "" {
+// Enqueue blocks until runLabelJob returns or the per-order timeout
+// fires. The webhook handler calls this from the request goroutine
+// and tolerates the latency: SuperFrete is ~5-10s on a good day, well
+// inside Stripe's 30s webhook budget.
+func (d *syncLabelDispatcher) Enqueue(orderID string) {
+	if d == nil || d.ship == nil || d.orders == nil || orderID == "" {
 		return
 	}
-	select {
-	case w.queue <- orderID:
-	default:
-		log.Printf("label_job: queue full, dropping order=%s (manual intervention needed)", orderID)
-	}
-}
-
-func (w *labelWorker) run() {
-	for id := range w.queue {
-		w.process(id)
-	}
-}
-
-// process executes the SuperFrete pipeline for one order. Errors are
-// logged with the orderID but otherwise swallowed — the customer already
-// paid, retrying forever in a tight loop would only make things worse.
-func (w *labelWorker) process(orderID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	o, ok, err := w.orders.get(ctx, orderID)
-	if err != nil {
-		log.Printf("label_job: get(%s): %v", orderID, err)
-		return
-	}
-	if !ok {
-		log.Printf("label_job: order %s not found", orderID)
-		return
-	}
-	if o.TrackingCode != "" {
-		// Already generated — likely a duplicate webhook delivery.
-		return
-	}
-	if w.ship.cfg.AccessToken == "" {
+	if d.ship.cfg.AccessToken == "" {
 		log.Printf("label_job: SuperFrete not configured, skipping order %s", orderID)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), d.timeout)
+	defer cancel()
+	if err := runLabelJob(ctx, d.orders, d.ship, orderID); err != nil {
+		log.Printf("label_job: order %s: %v (will retry via cron)", orderID, err)
+	}
+}
 
-	// Build a SuperFrete cart payload from the order. We use the single
-	// merged volume (the quote flow already handles multi-item packing)
-	// and preserve the service chosen by the customer.
+// runLabelJob runs the SuperFrete pipeline for a single order. Safe to
+// call multiple times: orders that already have a tracking_code are
+// skipped. On failure the error is recorded against the order
+// (tracking_attempts + tracking_last_error) so the cron retry loop has
+// state to back off against — and the error is returned so the
+// caller's logs aren't blank.
+func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, orderID string) error {
+	if orders == nil {
+		return errors.New("label job: order store missing")
+	}
+	if ship == nil || ship.cfg.AccessToken == "" {
+		return errors.New("label job: SuperFrete not configured")
+	}
+	if orderID == "" {
+		return errors.New("label job: empty order id")
+	}
+
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil {
+		return wrapAndRecord(ctx, orders, orderID, "load order", err)
+	}
+	if !ok {
+		return errors.New("label job: order not found")
+	}
+	if o.TrackingCode != "" {
+		// Already generated — duplicate webhook delivery or cron
+		// hitting a row right after a successful run. Idempotent skip.
+		return nil
+	}
+	if o.Status != "paid" {
+		// Don't generate labels for orders that aren't paid yet
+		// (refunded/failed orders should never call this either, but
+		// belt-and-suspenders).
+		return nil
+	}
+
 	pkgs, err := buildPackagesFromOrder(o)
 	if err != nil {
-		log.Printf("label_job: build packages for %s: %v", orderID, err)
-		return
+		return wrapAndRecord(ctx, orders, orderID, "build packages", err)
 	}
 	vol, insurance := mergeVolumes(pkgs)
 	cart := map[string]any{
 		"to": map[string]any{
-			"name":            o.Name,
-			"email":           o.Email,
-			"address":         o.Address,
-			"postal_code":     digitsOnly(o.Zip),
+			"name":        o.Name,
+			"email":       o.Email,
+			"address":     o.Address,
+			"postal_code": digitsOnly(o.Zip),
 		},
 		"service":         o.ShippingSvcID,
 		"products":        buildCartProducts(o),
@@ -110,42 +116,81 @@ func (w *labelWorker) process(orderID string) {
 		"tag":             o.ID,
 	}
 
-	sfOrderID, err := w.ship.AddToCart(ctx, cart)
+	sfOrderID, err := ship.AddToCart(ctx, cart)
 	if err != nil {
-		log.Printf("label_job: AddToCart(%s): %v", orderID, err)
-		return
+		return wrapAndRecord(ctx, orders, orderID, "addtocart", err)
 	}
-	if _, err := w.ship.Checkout(ctx, []string{sfOrderID}); err != nil {
-		log.Printf("label_job: Checkout(%s): %v", orderID, err)
-		return
+	if _, err := ship.Checkout(ctx, []string{sfOrderID}); err != nil {
+		return wrapAndRecord(ctx, orders, orderID, "checkout", err)
 	}
-	if _, err := w.ship.Generate(ctx, []string{sfOrderID}); err != nil {
-		log.Printf("label_job: Generate(%s): %v", orderID, err)
-		return
+	if _, err := ship.Generate(ctx, []string{sfOrderID}); err != nil {
+		return wrapAndRecord(ctx, orders, orderID, "generate", err)
 	}
-	printed, err := w.ship.Print(ctx, []string{sfOrderID}, "private")
+	printed, err := ship.Print(ctx, []string{sfOrderID}, "private")
 	if err != nil {
-		log.Printf("label_job: Print(%s): %v", orderID, err)
-		return
+		return wrapAndRecord(ctx, orders, orderID, "print", err)
 	}
 
-	info, err := w.ship.OrderInfo(ctx, sfOrderID)
-	if err != nil {
-		log.Printf("label_job: OrderInfo(%s): %v", orderID, err)
+	// OrderInfo failures are non-fatal: the label is already paid for
+	// and can be reprinted from the SuperFrete dashboard. We log and
+	// continue with whatever metadata Print returned.
+	info, infoErr := ship.OrderInfo(ctx, sfOrderID)
+	if infoErr != nil {
+		log.Printf("label_job: order_info(%s): %v (non-fatal)", orderID, infoErr)
 	}
 	trackingCode, trackingURL := parseTrackingFromInfo(info)
 	labelURL := parseLabelURL(printed)
 
-	if err := w.orders.setTracking(ctx, orderID, trackingCode, trackingURL, labelURL, sfOrderID); err != nil {
-		log.Printf("label_job: setTracking(%s): %v", orderID, err)
-		return
+	if err := orders.setTracking(ctx, orderID, trackingCode, trackingURL, labelURL, sfOrderID); err != nil {
+		return wrapAndRecord(ctx, orders, orderID, "set tracking", err)
 	}
-	if err := w.orders.setStatus(ctx, orderID, "shipped"); err != nil {
+	if err := orders.setStatus(ctx, orderID, "shipped"); err != nil {
+		// Tracking is already saved; logging is enough.
 		log.Printf("label_job: setStatus(%s): %v", orderID, err)
-		return
 	}
 	log.Printf("label_job: order %s shipped (sf=%s tracking=%s)", orderID, sfOrderID, trackingCode)
+	return nil
 }
+
+// wrapAndRecord stamps the underlying error onto the order row and
+// returns it so the caller can log + propagate. Errors from the record
+// step itself are logged but never replace the original failure.
+func wrapAndRecord(ctx context.Context, orders *orderStore, orderID, stage string, cause error) error {
+	wrapped := errors.New("label_job: " + stage + ": " + cause.Error())
+	// Use a short, fresh context for the bookkeeping write so a
+	// cancelled parent ctx doesn't keep us from recording the error.
+	bookCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := orders.recordTrackingFailure(bookCtx, orderID, wrapped.Error()); err != nil {
+		log.Printf("label_job: recordTrackingFailure(%s): %v", orderID, err)
+	}
+	return wrapped
+}
+
+// labelBackoff returns the minimum delay between attempts for a given
+// attempt count. We start at 2 minutes and double up to 1 hour. The
+// cron worker queries `now - tracking_attempted_at >= labelBackoff` to
+// decide whether a stuck order is ready for another try.
+func labelBackoff(attempts int) time.Duration {
+	if attempts <= 0 {
+		return 0
+	}
+	const base = 2 * time.Minute
+	const max = time.Hour
+	d := base
+	for i := 1; i < attempts && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	return d
+}
+
+// maxLabelAttempts caps how many times we retry a single order before
+// it stops appearing in the cron sweep. Past this, the admin UI still
+// surfaces the order so an operator can fix the data and re-trigger.
+const maxLabelAttempts = 8
 
 // buildPackagesFromOrder reconstructs the per-product package presets we
 // stored in the catalog at quote time. The order_items table is the
@@ -164,8 +209,8 @@ func buildCartProducts(o *pendingOrder) []map[string]any {
 	out := make([]map[string]any, 0, len(o.Items))
 	for _, it := range o.Items {
 		out = append(out, map[string]any{
-			"name":         it.ProductName,
-			"quantity":     it.Quantity,
+			"name":          it.ProductName,
+			"quantity":      it.Quantity,
 			"unitary_value": float64(it.UnitPriceCents) / 100.0,
 		})
 	}
@@ -180,7 +225,7 @@ func parseTrackingFromInfo(raw json.RawMessage) (code, url string) {
 		return "", ""
 	}
 	var shape struct {
-		Tracking    string `json:"tracking"`
+		Tracking     string `json:"tracking"`
 		TrackingCode string `json:"tracking_code"`
 		TrackingURL  string `json:"tracking_url"`
 	}

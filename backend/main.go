@@ -953,17 +953,22 @@ func main() {
 		appURL = "http://localhost:5173"
 	}
 
-	labelWrk := newLabelWorker(orders, shipClient)
+	labelDisp := newSyncLabelDispatcher(orders, shipClient, labelTimeoutFromEnv())
 	emailCfg := loadEmailConfig(tokenKey, appURL)
 	emailWrk := newEmailWorker(emailCfg, orders)
 	if emailCfg.APIKey == "" {
 		log.Printf("Resend: RESEND_API_KEY not set — confirmation emails disabled")
 	}
 
+	internalCfg := loadInternalJobsConfig()
+	if internalCfg.token == "" {
+		log.Printf("internal jobs: INTERNAL_JOB_TOKEN / CRON_SECRET not set — /api/internal/jobs/* disabled")
+	}
+
 	webhookDeps := webhookDeps{
 		Orders:   orders,
 		Products: products,
-		LabelJob: labelWrk,
+		LabelJob: labelDisp,
 		EmailJob: emailWrk,
 		AppURL:   appURL,
 		TokenKey: tokenKey,
@@ -994,6 +999,9 @@ func main() {
 	mux.HandleFunc("/api/admin/coupons/", adminAuthFromCfg(adminCfg, handleAdminCouponByCode(coupons)))
 	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
 	mux.HandleFunc("/api/admin/upload", adminAuthFromCfg(adminCfg, handleAdminUpload()))
+	mux.HandleFunc("/api/admin/orders/pending-labels", adminAuthFromCfg(adminCfg, handleAdminPendingLabels(orders)))
+	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, labelTimeoutFromEnv())))
+	mux.HandleFunc("/api/internal/jobs/process-labels", handleProcessLabelsJob(internalCfg, orders, shipClient))
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 

@@ -55,26 +55,31 @@ func loadEmailConfig(tokenKey []byte, appURL string) emailConfig {
 	}
 }
 
-// emailWorker consumes order ids and sends the confirmation email.
-// Implements emailEnqueuer.
+// emailWorker sends the order-confirmation email via Resend.
+// Implements emailEnqueuer with a *synchronous* Enqueue so the webhook
+// path works on serverless platforms (Vercel, Cloud Run) where the OS
+// process is killed as soon as the response is flushed and an
+// in-memory channel-based goroutine never gets a chance to run. The
+// send itself is a single HTTP POST, typically well under a second.
 type emailWorker struct {
 	cfg    emailConfig
 	orders *orderStore
 	http   *http.Client
-	queue  chan string
 }
 
 func newEmailWorker(cfg emailConfig, orders *orderStore) *emailWorker {
-	w := &emailWorker{
+	return &emailWorker{
 		cfg:    cfg,
 		orders: orders,
 		http:   &http.Client{Timeout: resendHTTPTimeout},
-		queue:  make(chan string, 256),
 	}
-	go w.run()
-	return w
 }
 
+// Enqueue blocks until the Resend call returns or the local timeout
+// fires. Failures are logged but never bubble up: we don't want a
+// transient Resend outage to fail-loop a Stripe webhook — the order
+// is already paid and we have other ways (admin UI, manual resend) to
+// surface the missed email.
 func (w *emailWorker) Enqueue(orderID string) {
 	if w == nil || orderID == "" {
 		return
@@ -82,25 +87,14 @@ func (w *emailWorker) Enqueue(orderID string) {
 	if w.cfg.APIKey == "" || w.cfg.From == "" {
 		return
 	}
-	select {
-	case w.queue <- orderID:
-	default:
-		log.Printf("email_job: queue full, dropping order=%s", orderID)
-	}
-}
-
-func (w *emailWorker) run() {
-	for id := range w.queue {
-		if err := w.process(id); err != nil {
-			log.Printf("email_job: send(%s): %v", id, err)
-		}
-	}
-}
-
-func (w *emailWorker) process(orderID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	if err := w.process(ctx, orderID); err != nil {
+		log.Printf("email_job: send(%s): %v", orderID, err)
+	}
+}
 
+func (w *emailWorker) process(ctx context.Context, orderID string) error {
 	o, ok, err := w.orders.get(ctx, orderID)
 	if err != nil {
 		return err
