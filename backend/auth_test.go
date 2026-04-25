@@ -23,12 +23,12 @@ func newTestAuthCfg() authConfig {
 
 func newAuthMux(t *testing.T) (*http.ServeMux, *userStore, authConfig, func()) {
 	t.Helper()
-	_, db, cleanup := newTestStore(t)
+	store, db, cleanup := newTestStore(t)
 	users := newUserStore(db)
 	cfg := newTestAuthCfg()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/signup", handleSignup(cfg, users))
-	mux.HandleFunc("/api/auth/login", handleLogin(cfg, users))
+	mux.HandleFunc("/api/auth/signup", handleSignup(cfg, users, store))
+	mux.HandleFunc("/api/auth/login", handleLogin(cfg, users, store))
 	mux.HandleFunc("/api/auth/logout", handleLogout(cfg, users))
 	mux.Handle("/api/auth/me", loadCurrentUser(cfg, users)(http.HandlerFunc(handleMe)))
 	return mux, users, cfg, cleanup
@@ -313,8 +313,8 @@ func TestAuthDisabled_Returns503(t *testing.T) {
 	cfg := authConfig{} // zero-value = disabled
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/signup", handleSignup(cfg, users))
-	mux.HandleFunc("/api/auth/login", handleLogin(cfg, users))
+	mux.HandleFunc("/api/auth/signup", handleSignup(cfg, users, nil))
+	mux.HandleFunc("/api/auth/login", handleLogin(cfg, users, nil))
 
 	for _, path := range []string{"/api/auth/signup", "/api/auth/login"} {
 		rr := doJSON(t, mux, "POST", path, map[string]string{

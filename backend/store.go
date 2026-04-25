@@ -53,6 +53,10 @@ type pendingOrder struct {
 	SuperfreteID        string
 	CouponCode          string
 	DiscountCents       int
+	// UserID is the userAccount.id that placed the order (PR C). Empty
+	// string for anonymous/legacy orders; the /api/account/orders
+	// endpoint handles those by matching on email_lower.
+	UserID              string
 	TrackingAttempts    int
 	TrackingLastError   string
 	TrackingAttemptedAt time.Time
@@ -103,9 +107,9 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
-		coupon_code, discount_cents,
+		coupon_code, discount_cents, user_id,
 		created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
 		o.ID, o.Name, o.Email, o.Address, o.Zip,
 		o.Document, o.AddressNumber, o.AddressComplement, o.District, o.City, o.State,
 		o.PaymentMethod, o.Status,
@@ -113,7 +117,7 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 		nullableInt(o.ShippingSvcID), nullableStr(o.ShippingSvcName),
 		nullableStr(o.PaymentIntentID), nullableStr(o.TrackingCode),
 		nullableStr(o.TrackingURL), nullableStr(o.LabelURL), nullableStr(o.SuperfreteID),
-		nullableStr(o.CouponCode), o.DiscountCents,
+		nullableStr(o.CouponCode), o.DiscountCents, nullableStr(o.UserID),
 		o.CreatedAt, o.UpdatedAt,
 	)
 	if err != nil {
@@ -148,7 +152,7 @@ func (s *orderStore) get(ctx context.Context, id string) (*pendingOrder, bool, e
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
-		coupon_code, discount_cents,
+		coupon_code, discount_cents, user_id,
 		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at
 	FROM orders WHERE id = ?`), id)
@@ -177,7 +181,7 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
-		coupon_code, discount_cents,
+		coupon_code, discount_cents, user_id,
 		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at
 	FROM orders WHERE payment_intent_id = ? LIMIT 1`), piID)
@@ -281,7 +285,7 @@ func (s *orderStore) listPendingLabels(ctx context.Context, cutoff time.Time, ma
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
-		coupon_code, discount_cents,
+		coupon_code, discount_cents, user_id,
 		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at
 	FROM orders
@@ -332,7 +336,7 @@ func (s *orderStore) listOrders(ctx context.Context, status string, limit, offse
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
-		coupon_code, discount_cents,
+		coupon_code, discount_cents, user_id,
 		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at`
 	var (
@@ -405,6 +409,101 @@ func (s *orderStore) deleteOrder(ctx context.Context, id string) error {
 // doesn't match any row. The handler translates it to a 404.
 var errOrderNotFound = errors.New("order not found")
 
+// listByUser returns every order belonging to a given customer. Uses
+// a UNION of two predicates:
+//   - orders.user_id = userID          (canonical link)
+//   - orders.email   = emailLower      (legacy match for orders
+//                                       placed before PR C)
+// Both arms filter on status so pending_payment orders (where the
+// customer never completed Stripe) don't leak into the history. The
+// cap (50) is conservative — the /minha-conta UI doesn't paginate.
+func (s *orderStore) listByUser(ctx context.Context, userID, emailLower string) ([]*pendingOrder, error) {
+	if userID == "" && emailLower == "" {
+		return nil, nil
+	}
+	baseCols := `id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
+		total_cents, shipping_cents, amount_cents,
+		shipping_service_id, shipping_service_name,
+		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents, user_id,
+		tracking_attempts, tracking_last_error, tracking_attempted_at,
+		created_at, updated_at`
+	// The WHERE clause is built dynamically so we don't have to pass
+	// a placeholder for the email when userID alone is enough (and
+	// vice versa). Lowercasing is done by the caller so we keep this
+	// query case-sensitive-but-normalized.
+	where := `WHERE status != 'pending_payment' AND (`
+	args := []any{}
+	parts := []string{}
+	if userID != "" {
+		parts = append(parts, "user_id = ?")
+		args = append(args, userID)
+	}
+	if emailLower != "" {
+		parts = append(parts, "LOWER(email) = ?")
+		args = append(args, emailLower)
+	}
+	where += joinOr(parts) + `)`
+	rows, err := s.db.QueryContext(ctx, rb(`SELECT `+baseCols+`
+		FROM orders `+where+`
+		ORDER BY created_at DESC LIMIT 50`), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list by user: %w", err)
+	}
+	defer rows.Close()
+	var out []*pendingOrder
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, o := range out {
+		if err := s.loadItems(ctx, o); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// linkOrdersByEmail retroactively attaches user_id to every order
+// with a matching email_lower that doesn't already have one. Called
+// on signup/login so PR C's /minha-conta page shows history for
+// purchases made before the customer had an account.
+func (s *orderStore) linkOrdersByEmail(ctx context.Context, userID, emailLower string) error {
+	if userID == "" || emailLower == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, rb(
+		`UPDATE orders SET user_id = ?, updated_at = ?
+		 WHERE (user_id IS NULL OR user_id = '') AND LOWER(email) = ?`),
+		userID, time.Now().UTC(), emailLower,
+	)
+	if err != nil {
+		return fmt.Errorf("link legacy orders: %w", err)
+	}
+	return nil
+}
+
+// joinOr is strings.Join(parts, " OR ") without importing strings
+// just for that — store.go is already import-lean.
+func joinOr(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += " OR "
+		}
+		out += p
+	}
+	return out
+}
+
 // recordEvent appends a row to payment_events. The payload is kept as
 // raw JSON text so we can replay/audit it later without re-fetching
 // from Stripe. Errors are returned but callers typically log-and-continue.
@@ -458,7 +557,7 @@ func (s *orderStore) loadItems(ctx context.Context, o *pendingOrder) error {
 func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	var o pendingOrder
 	var shipID sql.NullInt64
-	var shipName, piID, code, url, labelURL, supID, couponCode, lastErr sql.NullString
+	var shipName, piID, code, url, labelURL, supID, couponCode, lastErr, userID sql.NullString
 	var attemptedAt sql.NullTime
 	err := row.Scan(
 		&o.ID, &o.Name, &o.Email, &o.Address, &o.Zip,
@@ -468,7 +567,7 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 		&o.TotalCents, &o.ShippingCents, &o.AmountCents,
 		&shipID, &shipName,
 		&piID, &code, &url, &labelURL, &supID,
-		&couponCode, &o.DiscountCents,
+		&couponCode, &o.DiscountCents, &userID,
 		&o.TrackingAttempts, &lastErr, &attemptedAt,
 		&o.CreatedAt, &o.UpdatedAt,
 	)
@@ -485,6 +584,7 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	o.LabelURL = labelURL.String
 	o.SuperfreteID = supID.String
 	o.CouponCode = couponCode.String
+	o.UserID = userID.String
 	o.TrackingLastError = lastErr.String
 	if attemptedAt.Valid {
 		o.TrackingAttemptedAt = attemptedAt.Time

@@ -900,6 +900,15 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 			discountCents = summary.TotalDiscountCents
 		}
 		amount := finalSubtotal + finalShipping
+		// Link the order to the authenticated customer when the
+		// request arrived with a valid session cookie. Anonymous
+		// checkouts continue to work (guest flow / auth disabled)
+		// and keep UserID empty — those orders are still reachable
+		// via /api/account/orders by email match.
+		var userID string
+		if u := currentUser(r); u != nil {
+			userID = u.ID
+		}
 		order := &pendingOrder{
 			ID:                randomID("ord_"),
 			Name:              name,
@@ -921,6 +930,7 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 			Status:            "pending_payment",
 			CouponCode:        appliedCode,
 			DiscountCents:     discountCents,
+			UserID:            userID,
 			CreatedAt:         time.Now().UTC(),
 			Items:             items,
 		}
@@ -1145,12 +1155,17 @@ func main() {
 	} else if !gcfg.enabled() {
 		log.Printf("auth: GOOGLE_CLIENT_ID/SECRET/REDIRECT_URL not set — Google sign-in disabled (email/password still works)")
 	}
-	mux.HandleFunc("/api/auth/signup", handleSignup(authCfg, users))
-	mux.HandleFunc("/api/auth/login", handleLogin(authCfg, users))
+	mux.HandleFunc("/api/auth/signup", handleSignup(authCfg, users, orders))
+	mux.HandleFunc("/api/auth/login", handleLogin(authCfg, users, orders))
 	mux.HandleFunc("/api/auth/logout", handleLogout(authCfg, users))
 	mux.HandleFunc("/api/auth/me", handleMe)
 	mux.HandleFunc("/api/auth/google/start", handleGoogleStart(authCfg, gcfg))
-	mux.HandleFunc("/api/auth/google/callback", handleGoogleCallback(authCfg, gcfg, users))
+	mux.HandleFunc("/api/auth/google/callback", handleGoogleCallback(authCfg, gcfg, users, orders))
+	// Account endpoints — behind requireAuth, shared 503 short-circuit
+	// when auth is not configured so the /minha-conta page falls back
+	// to the friendly "login indisponível" message instead of an
+	// opaque 401.
+	mux.HandleFunc("/api/account/orders", handleMyOrders(authCfg, orders, tokenKey))
 
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
