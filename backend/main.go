@@ -1128,6 +1128,25 @@ func main() {
 	viacepClient := newViaCepClient()
 	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, viacepClient, labelTimeoutFromEnv())))
 	mux.HandleFunc("/api/internal/jobs/process-labels", handleProcessLabelsJob(internalCfg, orders, shipClient, viacepClient))
+
+	// Customer auth (email/password + Google OAuth). 503s until
+	// AUTH_SESSION_SECRET is configured so the surface stays inert
+	// in deployments that haven't opted in yet.
+	authCfg := loadAuthConfig()
+	gcfg := loadGoogleConfig()
+	users := newUserStore(db)
+	if !authCfg.enabled() {
+		log.Printf("auth: AUTH_SESSION_SECRET not set — /api/auth/* returns 503")
+	} else if !gcfg.enabled() {
+		log.Printf("auth: GOOGLE_CLIENT_ID/SECRET/REDIRECT_URL not set — Google sign-in disabled (email/password still works)")
+	}
+	mux.HandleFunc("/api/auth/signup", handleSignup(authCfg, users))
+	mux.HandleFunc("/api/auth/login", handleLogin(authCfg, users))
+	mux.HandleFunc("/api/auth/logout", handleLogout(authCfg, users))
+	mux.HandleFunc("/api/auth/me", handleMe)
+	mux.HandleFunc("/api/auth/google/start", handleGoogleStart(authCfg, gcfg))
+	mux.HandleFunc("/api/auth/google/callback", handleGoogleCallback(authCfg, gcfg, users))
+
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 
@@ -1135,6 +1154,10 @@ func main() {
 	csp := buildCSP(staticDir != "", plausibleSrc)
 
 	var h http.Handler = mux
+	// loadCurrentUser attaches the authenticated userAccount to the
+	// request context when a valid session cookie is present. It is
+	// a no-op when auth is disabled or the user is anonymous.
+	h = loadCurrentUser(authCfg, users)(h)
 	h = withBodyLimit(1<<16, h) // 64KiB
 	h = withRateLimit(rl, trustedProxies, h)
 	h = withCORS(allowedOriginsFromEnv(), h)
