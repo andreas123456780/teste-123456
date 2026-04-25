@@ -1,6 +1,7 @@
 import { motion, useScroll, useTransform } from "framer-motion";
 import { NastLogo } from "./NastLogo";
 import { Instagram, Linktree, ShoppingBag } from "./icons";
+import { useAuth } from "../lib/useAuth";
 
 const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
 const LINKTREE_URL =
@@ -12,6 +13,10 @@ type Props = {
 };
 
 export function Header({ cartCount, onOpenCart }: Props) {
+  // Auth state decides whether the top bar shows "Entrar" or the
+  // signed-in user's first name with a Sair button. When auth is
+  // disabled server-side (503), the affordance is hidden entirely.
+  const auth = useAuth();
   const { scrollY } = useScroll();
   const bg = useTransform(scrollY, [0, 120], [
     "rgba(6,6,6,0)",
@@ -69,6 +74,32 @@ export function Header({ cartCount, onOpenCart }: Props) {
         </nav>
 
         <div className="flex items-center gap-2">
+          {!auth.disabled && !auth.loading && (
+            auth.user ? (
+              <div className="hidden items-center gap-2 sm:flex">
+                <span className="max-w-[140px] truncate text-xs uppercase tracking-[0.2em] text-white/60">
+                  {firstName(auth.user.name, auth.user.email)}
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await auth.logout();
+                    window.location.reload();
+                  }}
+                  className="border border-white/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/70 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                >
+                  Sair
+                </button>
+              </div>
+            ) : (
+              <a
+                href="/login"
+                className="hidden border border-white/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/70 transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] sm:inline-block"
+              >
+                Entrar
+              </a>
+            )
+          )}
           <motion.a
             href={INSTAGRAM_URL}
             target="_blank"
@@ -115,4 +146,15 @@ export function Header({ cartCount, onOpenCart }: Props) {
       </div>
     </motion.header>
   );
+}
+
+// firstName returns the customer's display chip for the header.
+// Prefers the first token of the full name; falls back to the local
+// part of the email when name is empty (Google OAuth with missing
+// given_name falls into this path).
+function firstName(name: string, email: string): string {
+  const n = (name || "").trim().split(/\s+/)[0];
+  if (n) return n;
+  const local = (email || "").split("@")[0];
+  return local || "conta";
 }

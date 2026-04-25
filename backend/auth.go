@@ -103,6 +103,19 @@ func (c authConfig) parseCookie(raw string) (string, error) {
 	return parts[1], nil
 }
 
+// sameSiteForCfg picks the appropriate SameSite attribute. In
+// production (cookieSecure=true) the SPA fetches the backend on a
+// separate origin, so the cookie needs SameSite=None to travel with
+// the request — browsers require Secure for None. In local dev
+// (HTTP, cookieSecure=false) we fall back to Lax so the cookie is
+// still accepted without HTTPS.
+func sameSiteForCfg(c authConfig) http.SameSite {
+	if c.cookieSecure {
+		return http.SameSiteNoneMode
+	}
+	return http.SameSiteLaxMode
+}
+
 func (c authConfig) setSessionCookie(w http.ResponseWriter, sessionID string) {
 	ck := &http.Cookie{
 		Name:     sessionCookieName,
@@ -112,11 +125,7 @@ func (c authConfig) setSessionCookie(w http.ResponseWriter, sessionID string) {
 		MaxAge:   int(sessionCookieMaxAge.Seconds()),
 		HttpOnly: true,
 		Secure:   c.cookieSecure,
-		// Lax keeps the cookie on top-level navigations (including
-		// the Google OAuth redirect back to /api/auth/google/callback)
-		// while blocking cross-site POSTs — the sweet spot for a
-		// session cookie with no refresh token.
-		SameSite: http.SameSiteLaxMode,
+		SameSite: sameSiteForCfg(c),
 	}
 	if c.cookieDomain != "" {
 		ck.Domain = c.cookieDomain
@@ -133,7 +142,7 @@ func (c authConfig) clearSessionCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   c.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: sameSiteForCfg(c),
 	}
 	if c.cookieDomain != "" {
 		ck.Domain = c.cookieDomain

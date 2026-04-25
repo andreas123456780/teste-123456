@@ -7,6 +7,7 @@ import { Close, Minus, Plus, Lock, WhatsApp } from "./icons";
 import { ProductArt } from "./ProductArt";
 import { ShippingQuote } from "./ShippingQuote";
 import { StripePaymentStep } from "./StripePaymentStep";
+import { useAuth } from "../lib/useAuth";
 
 type Props = {
   open: boolean;
@@ -110,6 +111,12 @@ export function Cart({
   onClear,
   whatsAppNumber,
 }: Props) {
+  // Checkout requires a signed-in customer (see PR B). When auth is
+  // disabled server-side (authDisabled=true) we fall through to the
+  // old guest flow instead of hard-blocking — keeps dev environments
+  // without AUTH_SESSION_SECRET functional.
+  const auth = useAuth();
+  const authDisabled = auth.disabled;
   const [form, setForm] = useState<FormState>({
     name: "",
     email: "",
@@ -122,6 +129,24 @@ export function Cart({
     city: "",
     state: "",
   });
+
+  // Prefill name+email once when the auth check resolves. Effect
+  // (not render-time setState) because auth.user arrives after the
+  // first paint. Running once per user.id is enforced by the
+  // dependency list; subsequent user edits to either field are
+  // preserved through the `prev.name ||` short-circuit.
+  const authUserId = auth.user?.id;
+  const authUserName = auth.user?.name;
+  const authUserEmail = auth.user?.email;
+  useEffect(() => {
+    if (!authUserId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setForm((prev) => ({
+      ...prev,
+      name: prev.name || authUserName || "",
+      email: prev.email || authUserEmail || "",
+    }));
+  }, [authUserId, authUserName, authUserEmail]);
   // Track which fields ViaCEP filled for us so we can mark them
   // read-only and hint to the user why. If ViaCEP returns an empty
   // value for any field we keep that field editable.
@@ -273,6 +298,13 @@ export function Cart({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (items.length === 0) return;
+    // Gate 1: require authenticated customer (skipped when the
+    // backend disabled auth so local dev stays usable).
+    if (!authDisabled && !auth.user) {
+      const next = encodeURIComponent("/?checkout=1");
+      window.location.assign(`/login?next=${next}`);
+      return;
+    }
     // Run the client-side validators before hitting the API so the
     // user sees an immediate error instead of a 400 from the backend.
     if (!isFullName(form.name)) {
@@ -610,7 +642,29 @@ export function Cart({
               )}
               </div>
 
-            {!order && !payment && items.length > 0 && (
+            {!order && !payment && items.length > 0 && !authDisabled && !auth.loading && !auth.user && (
+              <div className="border-t border-white/10 px-6 py-4">
+                <div className="rounded-xl border border-white/15 bg-white/5 p-4 text-sm text-white/80">
+                  <p>Para finalizar sua compra, entre na sua conta.</p>
+                  <div className="mt-3 flex gap-2">
+                    <a
+                      href="/login?next=%2F%3Fcheckout%3D1"
+                      className="flex-1 rounded-xl bg-white py-2 text-center text-xs font-bold uppercase tracking-[0.2em] text-black"
+                    >
+                      Entrar
+                    </a>
+                    <a
+                      href="/cadastro?next=%2F%3Fcheckout%3D1"
+                      className="flex-1 rounded-xl border border-white/20 py-2 text-center text-xs font-bold uppercase tracking-[0.2em] text-white"
+                    >
+                      Criar conta
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!order && !payment && items.length > 0 && (authDisabled || auth.user || auth.loading) && (
               <form
                 onSubmit={submit}
                 className="flex flex-col gap-3 border-t border-white/10 px-6 py-4"
