@@ -92,9 +92,13 @@ plus a ViaCEP lookup against the stored zip:
 curl -X POST \
   -H "X-Admin-Token: $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"João da Silva Santos"}' \
+  -d '{"name":"João da Silva Santos","document":"123.456.789-00"}' \
   https://<backend>/api/admin/orders/ord_xxx/retry-label
 ```
+
+SuperFrete requires `to.document` (CPF or CNPJ) on most accounts.
+Non-digit characters are stripped server-side, so both
+`"123.456.789-00"` and `"12345678900"` work.
 
 ### ViaCEP enrichment
 

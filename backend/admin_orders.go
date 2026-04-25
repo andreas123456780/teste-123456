@@ -124,6 +124,10 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *v
 type adminRetryLabelBody struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
+	// Document is the recipient CPF (11 digits) or CNPJ (14 digits).
+	// SuperFrete requires it on the majority of accounts. Any
+	// non-digit characters are stripped before the call.
+	Document string `json:"document"`
 	// Split address details. Leave any of these blank to let ViaCEP
 	// resolve from the stored zip.
 	District string `json:"district"`
@@ -158,6 +162,7 @@ func adminRetryLabel(w http.ResponseWriter, r *http.Request, orders *orderStore,
 			}
 			overrides.Name = strings.TrimSpace(body.Name)
 			overrides.Address = strings.TrimSpace(body.Address)
+			overrides.Document = strings.TrimSpace(body.Document)
 			overrides.Details = addressDetails{
 				District: strings.TrimSpace(body.District),
 				City:     strings.TrimSpace(body.City),
