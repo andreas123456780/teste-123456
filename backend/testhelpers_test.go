@@ -56,6 +56,28 @@ func newTestCoupons(t *testing.T, db *sql.DB) *couponsStore {
 	return newCouponsStore(db)
 }
 
+// validCheckoutDefaults returns the recipient fields required by the
+// current checkout validation (full name, CPF, split address). Tests
+// spread this into their CheckoutRequest to avoid repeating the
+// boilerplate after every schema change.
+//
+// The CPF below is a placeholder that passes the digits-only + not-all-
+// repeated check; it is never sent to SuperFrete during tests.
+func validCheckoutDefaults() CheckoutRequest {
+	return CheckoutRequest{
+		Name:              "Andreas Teste",
+		Email:             "andreas@example.com",
+		Document:          "12345678909",
+		Address:           "Rua das Flores",
+		AddressNumber:     "123",
+		AddressComplement: "",
+		District:          "Centro",
+		City:              "São Paulo",
+		State:             "SP",
+		ZipCode:           "01000-000",
+	}
+}
+
 // putTestOrder is a small helper used in several tests to create a
 // minimal pending order.
 func putTestOrder(t *testing.T, store *orderStore, id, email, method string, amount, shipping int) *pendingOrder {

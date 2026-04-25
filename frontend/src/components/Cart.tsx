@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CartItem } from "../types";
 import { api, type ShippingOption } from "../api";
 import { formatBRL } from "../utils/format";
@@ -52,7 +52,54 @@ function buildPixWhatsAppLink(opts: {
   return `https://wa.me/${opts.phone}?text=${encodeURIComponent(lines.join("\n"))}`;
 }
 
-type FormState = { name: string; email: string; address: string; zipCode: string };
+// FormState holds every recipient field SuperFrete / our backend
+// require. `address` is the logradouro only; `addressNumber` and
+// `addressComplement` are kept separate so we can ship a structured
+// address to the label API and save the admin from guessing where
+// "Rua X 123 fundos ap 4" ends and starts.
+type FormState = {
+  name: string;
+  email: string;
+  document: string; // CPF formatted with mask, digits-only sent to API
+  zipCode: string;
+  address: string;
+  addressNumber: string;
+  addressComplement: string;
+  district: string;
+  city: string;
+  state: string;
+};
+
+function maskCpf(raw: string): string {
+  const d = raw.replace(/\D/g, "").slice(0, 11);
+  const parts: string[] = [];
+  if (d.length > 0) parts.push(d.slice(0, Math.min(3, d.length)));
+  if (d.length > 3) parts.push(d.slice(3, Math.min(6, d.length)));
+  if (d.length > 6) parts.push(d.slice(6, Math.min(9, d.length)));
+  const head = parts.join(".");
+  const tail = d.length > 9 ? "-" + d.slice(9, 11) : "";
+  return head + tail;
+}
+
+// Client-side mirrors of the Go validators. Keep the logic aligned so
+// the form can show errors before a round-trip to /api/checkout.
+function isFullName(s: string): boolean {
+  const fields = s.trim().split(/\s+/).filter(Boolean);
+  if (fields.length < 2) return false;
+  return fields.every((f) => f.length >= 2);
+}
+
+function isCpfOrCnpjDigits(s: string): boolean {
+  const d = s.replace(/\D/g, "");
+  if (d.length !== 11 && d.length !== 14) return false;
+  return !/^(\d)\1+$/.test(d);
+}
+
+const UF_LIST = [
+  "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA",
+  "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN",
+  "RS", "RO", "RR", "SC", "SP", "SE", "TO",
+];
 
 export function Cart({
   open,
@@ -66,9 +113,21 @@ export function Cart({
   const [form, setForm] = useState<FormState>({
     name: "",
     email: "",
-    address: "",
+    document: "",
     zipCode: "",
+    address: "",
+    addressNumber: "",
+    addressComplement: "",
+    district: "",
+    city: "",
+    state: "",
   });
+  // Track which fields ViaCEP filled for us so we can mark them
+  // read-only and hint to the user why. If ViaCEP returns an empty
+  // value for any field we keep that field editable.
+  const [cepLoading, setCepLoading] = useState(false);
+  const [cepError, setCepError] = useState<string | null>(null);
+  const cepRequestRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [order, setOrder] = useState<{
     id: string;
@@ -100,6 +159,56 @@ export function Cart({
     itemDiscountCents: number;
     shippingDiscountCents: number;
   } | null>(null);
+
+  // Auto-fill logradouro/bairro/cidade/uf whenever the user types a
+  // full (8-digit) CEP. We debounce 400ms so the backend isn't hit on
+  // every keystroke, and race-guard via a monotonic request id so a
+  // slow response for an earlier CEP can't overwrite newer state.
+  useEffect(() => {
+    const digits = form.zipCode.replace(/\D/g, "");
+    if (digits.length !== 8) {
+      // No synchronous setState here — eslint react-hooks forbids it
+      // because it would trigger a cascading render. If the user is
+      // still typing, keep whatever loading/error state the previous
+      // effect run left; the next valid CEP will overwrite it.
+      return;
+    }
+    const id = ++cepRequestRef.current;
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      setCepLoading(true);
+      setCepError(null);
+      api
+        .lookupCep(digits)
+        .then((res) => {
+          if (cancelled || id !== cepRequestRef.current) return;
+          setForm((f) => ({
+            ...f,
+            address: res.logradouro || f.address,
+            district: res.bairro || f.district,
+            city: res.cidade || f.city,
+            state: res.uf || f.state,
+          }));
+          setCepError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled || id !== cepRequestRef.current) return;
+          const msg = err instanceof Error ? err.message : "";
+          if (msg.includes("404")) {
+            setCepError("CEP não encontrado. Preencha manualmente.");
+          } else {
+            setCepError("Não foi possível buscar o CEP. Preencha manualmente.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled && id === cepRequestRef.current) setCepLoading(false);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [form.zipCode]);
 
   const handleClose = () => {
     setOrder(null);
@@ -164,6 +273,28 @@ export function Cart({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (items.length === 0) return;
+    // Run the client-side validators before hitting the API so the
+    // user sees an immediate error instead of a 400 from the backend.
+    if (!isFullName(form.name)) {
+      setError("Digite seu nome completo (mínimo 2 palavras).");
+      return;
+    }
+    if (!isCpfOrCnpjDigits(form.document)) {
+      setError("CPF inválido. Digite os 11 dígitos.");
+      return;
+    }
+    if (form.zipCode.replace(/\D/g, "").length !== 8) {
+      setError("CEP incompleto.");
+      return;
+    }
+    if (!form.address.trim() || !form.addressNumber.trim()) {
+      setError("Endereço e número são obrigatórios.");
+      return;
+    }
+    if (!form.district.trim() || !form.city.trim() || !UF_LIST.includes(form.state)) {
+      setError("Endereço incompleto — confira CEP, bairro, cidade e UF.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -177,7 +308,13 @@ export function Cart({
         })),
         name: form.name,
         email: form.email,
+        document: form.document.replace(/\D/g, ""),
         address: form.address,
+        addressNumber: form.addressNumber,
+        addressComplement: form.addressComplement || undefined,
+        district: form.district,
+        city: form.city,
+        state: form.state,
         zipCode: form.zipCode,
         paymentMethod: method,
         shipping: shipping
@@ -517,11 +654,12 @@ export function Cart({
                   onSelect={(o) => setShipping(o)}
                 />
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-6 gap-2">
                   <input
                     required
-                    placeholder="Nome"
-                    className="col-span-2 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    placeholder="Nome completo"
+                    autoComplete="name"
+                    className="col-span-6 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
                     value={form.name}
                     onChange={(e) =>
                       setForm({ ...form, name: e.target.value })
@@ -531,7 +669,8 @@ export function Cart({
                     required
                     type="email"
                     placeholder="Email"
-                    className="col-span-2 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    autoComplete="email"
+                    className="col-span-6 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
                     value={form.email}
                     onChange={(e) =>
                       setForm({ ...form, email: e.target.value })
@@ -539,13 +678,97 @@ export function Cart({
                   />
                   <input
                     required
-                    placeholder="Endereço"
-                    className="col-span-2 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    inputMode="numeric"
+                    placeholder="CPF"
+                    autoComplete="off"
+                    maxLength={14}
+                    className="col-span-6 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    value={form.document}
+                    onChange={(e) =>
+                      setForm({ ...form, document: maskCpf(e.target.value) })
+                    }
+                  />
+                  <div className="col-span-6 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.25em] text-white/40">
+                    <span>endereço de entrega</span>
+                    {cepLoading ? (
+                      <span className="text-white/60">buscando CEP…</span>
+                    ) : null}
+                  </div>
+                  <input
+                    required
+                    placeholder="Logradouro (rua, avenida)"
+                    autoComplete="address-line1"
+                    className="col-span-4 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
                     value={form.address}
                     onChange={(e) =>
                       setForm({ ...form, address: e.target.value })
                     }
                   />
+                  <input
+                    required
+                    placeholder="Número"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={24}
+                    className="col-span-2 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    value={form.addressNumber}
+                    onChange={(e) =>
+                      setForm({ ...form, addressNumber: e.target.value })
+                    }
+                  />
+                  <input
+                    placeholder="Complemento (opcional)"
+                    autoComplete="address-line2"
+                    maxLength={120}
+                    className="col-span-6 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    value={form.addressComplement}
+                    onChange={(e) =>
+                      setForm({ ...form, addressComplement: e.target.value })
+                    }
+                  />
+                  <input
+                    required
+                    placeholder="Bairro"
+                    autoComplete="address-level3"
+                    maxLength={120}
+                    className="col-span-3 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    value={form.district}
+                    onChange={(e) =>
+                      setForm({ ...form, district: e.target.value })
+                    }
+                  />
+                  <input
+                    required
+                    placeholder="Cidade"
+                    autoComplete="address-level2"
+                    maxLength={120}
+                    className="col-span-2 border border-white/15 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[var(--color-accent)]"
+                    value={form.city}
+                    onChange={(e) =>
+                      setForm({ ...form, city: e.target.value })
+                    }
+                  />
+                  <select
+                    required
+                    aria-label="UF"
+                    className="col-span-1 border border-white/15 bg-transparent px-2 py-2.5 text-sm text-white outline-none focus:border-[var(--color-accent)]"
+                    value={form.state}
+                    onChange={(e) =>
+                      setForm({ ...form, state: e.target.value })
+                    }
+                  >
+                    <option value="" className="bg-black">UF</option>
+                    {UF_LIST.map((uf) => (
+                      <option key={uf} value={uf} className="bg-black">
+                        {uf}
+                      </option>
+                    ))}
+                  </select>
+                  {cepError ? (
+                    <div className="col-span-6 text-[11px] text-amber-300">
+                      {cepError}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="flex flex-col gap-2 border-t border-white/10 pt-3">

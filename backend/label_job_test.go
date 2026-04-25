@@ -486,6 +486,86 @@ func TestRunLabelJob_NameOverrideReachesSuperFrete(t *testing.T) {
 	}
 }
 
+// TestRunLabelJob_StoredRecipientFieldsReachSuperFrete verifies that
+// when the checkout form has already collected CPF + district + city
+// + state, runLabelJob ships them to SuperFrete without needing any
+// operator override or a ViaCEP fallback. This is the happy path for
+// orders created after the form redesign.
+func TestRunLabelJob_StoredRecipientFieldsReachSuperFrete(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+
+	if len(catalog) == 0 {
+		t.Fatal("catalog empty")
+	}
+	prod := catalog[0]
+	o := &pendingOrder{
+		ID:                "ord_stored",
+		Name:              "Cliente Teste",
+		Email:             "cliente@example.com",
+		Document:          "12345678909",
+		Address:           "Rua das Bandeiras",
+		AddressNumber:     "123",
+		AddressComplement: "Apto 42",
+		District:          "Vila Mariana",
+		City:              "São Paulo",
+		State:             "SP",
+		Zip:               "04101-300",
+		PaymentMethod:     "card",
+		Status:            "paid",
+		TotalCents:        prod.PriceCents,
+		ShippingCents:     2000,
+		AmountCents:       prod.PriceCents + 2000,
+		ShippingSvcID:     1,
+		ShippingSvcName:   "PAC",
+		CreatedAt:         time.Now().UTC(),
+		Items: []orderItem{
+			{ProductID: prod.ID, ProductName: prod.Name, Size: "M", Quantity: 1, UnitPriceCents: prod.PriceCents},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := store.create(ctx, o); err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+
+	// A ViaCEP client that MUST NOT be called — its URL points to an
+	// unreachable port. The test fails if runLabelJob asks it for
+	// anything, since every detail field is already stored on the
+	// order row.
+	failingViaCep := &viaCepClient{
+		http:    &http.Client{Timeout: 100 * time.Millisecond},
+		baseURL: "http://127.0.0.1:1",
+	}
+
+	if err := runLabelJob(ctx, store, ship, failingViaCep, "ord_stored", labelOverrides{}); err != nil {
+		t.Fatalf("runLabelJob: %v", err)
+	}
+	to, _ := fs.cartCapturedFields[0]["to"].(map[string]any)
+	if got, _ := to["document"].(string); got != "12345678909" {
+		t.Fatalf("to.document = %q, want 12345678909", got)
+	}
+	if got, _ := to["district"].(string); got != "Vila Mariana" {
+		t.Fatalf("to.district = %q, want Vila Mariana", got)
+	}
+	if got, _ := to["city"].(string); got != "São Paulo" {
+		t.Fatalf("to.city = %q, want São Paulo", got)
+	}
+	if got, _ := to["state_abbr"].(string); got != "SP" {
+		t.Fatalf("to.state_abbr = %q, want SP", got)
+	}
+	// Number/complement get appended to the address line so SuperFrete
+	// receives a single human-readable street.
+	if got, _ := to["address"].(string); got != "Rua das Bandeiras, 123 - Apto 42" {
+		t.Fatalf("to.address = %q, want 'Rua das Bandeiras, 123 - Apto 42'", got)
+	}
+}
+
 // Reuse the existing pendingOrder.errors check to guard against a
 // regression where wrapAndRecord swallows the original cause.
 func TestWrapAndRecordPreservesCause(t *testing.T) {
