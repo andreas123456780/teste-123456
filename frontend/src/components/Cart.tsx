@@ -166,18 +166,22 @@ export function Cart({
   // slow response for an earlier CEP can't overwrite newer state.
   useEffect(() => {
     const digits = form.zipCode.replace(/\D/g, "");
-    setCepError(null);
     if (digits.length !== 8) {
-      setCepLoading(false);
+      // No synchronous setState here — eslint react-hooks forbids it
+      // because it would trigger a cascading render. If the user is
+      // still typing, keep whatever loading/error state the previous
+      // effect run left; the next valid CEP will overwrite it.
       return;
     }
     const id = ++cepRequestRef.current;
-    setCepLoading(true);
+    let cancelled = false;
     const handle = setTimeout(() => {
+      setCepLoading(true);
+      setCepError(null);
       api
         .lookupCep(digits)
         .then((res) => {
-          if (id !== cepRequestRef.current) return;
+          if (cancelled || id !== cepRequestRef.current) return;
           setForm((f) => ({
             ...f,
             address: res.logradouro || f.address,
@@ -188,7 +192,7 @@ export function Cart({
           setCepError(null);
         })
         .catch((err: unknown) => {
-          if (id !== cepRequestRef.current) return;
+          if (cancelled || id !== cepRequestRef.current) return;
           const msg = err instanceof Error ? err.message : "";
           if (msg.includes("404")) {
             setCepError("CEP não encontrado. Preencha manualmente.");
@@ -197,10 +201,13 @@ export function Cart({
           }
         })
         .finally(() => {
-          if (id === cepRequestRef.current) setCepLoading(false);
+          if (!cancelled && id === cepRequestRef.current) setCepLoading(false);
         });
     }, 400);
-    return () => clearTimeout(handle);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
   }, [form.zipCode]);
 
   const handleClose = () => {
