@@ -9,7 +9,7 @@
   "crons": [
     {
       "path": "/api/internal/jobs/process-labels",
-      "schedule": "*/5 * * * *"
+      "schedule": "5 3 * * *"
     }
   ]
 }
