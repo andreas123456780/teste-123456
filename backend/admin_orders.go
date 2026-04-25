@@ -12,7 +12,10 @@ package main
 // payment.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -81,7 +84,10 @@ func handleAdminPendingLabels(orders *orderStore) http.HandlerFunc {
 // handleAdminOrderActions dispatches sub-routes under
 // /api/admin/orders/{id}/... . Today only the retry-label sub-route is
 // implemented; future moves (manual cancel, edit address) plug in here.
-func handleAdminOrderActions(orders *orderStore, ship *shippingClient, perOrder time.Duration) http.HandlerFunc {
+func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *viaCepClient, perOrder time.Duration) http.HandlerFunc {
+	if viacep == nil {
+		viacep = newViaCepClient()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/admin/orders/")
 		// The pending-labels listing is registered with an exact
@@ -103,14 +109,29 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, perOrder 
 		}
 		switch action {
 		case "retry-label":
-			adminRetryLabel(w, r, orders, ship, orderID, perOrder)
+			adminRetryLabel(w, r, orders, ship, viacep, orderID, perOrder)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown action"})
 		}
 	}
 }
 
-func adminRetryLabel(w http.ResponseWriter, r *http.Request, orders *orderStore, ship *shippingClient, orderID string, perOrder time.Duration) {
+// adminRetryLabelBody is the optional JSON payload the admin retry
+// endpoint accepts. Any field left empty falls back to the row stored
+// on the order (for district/city/state the backend additionally
+// consults ViaCEP). Primarily used to fix up orders where the checkout
+// form captured a first-name-only recipient, which SuperFrete rejects.
+type adminRetryLabelBody struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	// Split address details. Leave any of these blank to let ViaCEP
+	// resolve from the stored zip.
+	District string `json:"district"`
+	City     string `json:"city"`
+	State    string `json:"state"`
+}
+
+func adminRetryLabel(w http.ResponseWriter, r *http.Request, orders *orderStore, ship *shippingClient, viacep *viaCepClient, orderID string, perOrder time.Duration) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -122,11 +143,34 @@ func adminRetryLabel(w http.ResponseWriter, r *http.Request, orders *orderStore,
 	if perOrder <= 0 {
 		perOrder = 25 * time.Second
 	}
+
+	// Parse the optional overrides body. An empty body is fine — the
+	// common case is "just retry it".
+	overrides := labelOverrides{}
+	if r.Body != nil {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
+		_ = r.Body.Close()
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var body adminRetryLabelBody
+			if err := json.Unmarshal(raw, &body); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+				return
+			}
+			overrides.Name = strings.TrimSpace(body.Name)
+			overrides.Address = strings.TrimSpace(body.Address)
+			overrides.Details = addressDetails{
+				District: strings.TrimSpace(body.District),
+				City:     strings.TrimSpace(body.City),
+				State:    strings.ToUpper(strings.TrimSpace(body.State)),
+			}
+		}
+	}
+
 	// Slightly more generous than the cron — operators clicking the
 	// retry button want feedback that the call actually finished.
 	ctx, cancel := context.WithTimeout(r.Context(), perOrder+10*time.Second)
 	defer cancel()
-	if err := runLabelJob(ctx, orders, ship, orderID); err != nil {
+	if err := runLabelJob(ctx, orders, ship, viacep, orderID, overrides); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"error":   "retry failed",
 			"orderId": orderID,

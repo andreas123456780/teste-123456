@@ -32,6 +32,7 @@ import (
 type syncLabelDispatcher struct {
 	orders  *orderStore
 	ship    *shippingClient
+	viacep  *viaCepClient
 	timeout time.Duration
 }
 
@@ -39,7 +40,17 @@ func newSyncLabelDispatcher(orders *orderStore, ship *shippingClient, timeout ti
 	if timeout <= 0 {
 		timeout = 25 * time.Second
 	}
-	return &syncLabelDispatcher{orders: orders, ship: ship, timeout: timeout}
+	return &syncLabelDispatcher{orders: orders, ship: ship, viacep: newViaCepClient(), timeout: timeout}
+}
+
+// labelOverrides carries operator-provided overrides for a single
+// runLabelJob invocation. Used by the admin retry endpoint so the
+// operator can patch a bad recipient name (or manually-entered address
+// line) without having to edit the underlying order row first.
+type labelOverrides struct {
+	Name    string
+	Address string
+	Details addressDetails // empty fields fall back to ViaCEP
 }
 
 // Enqueue blocks until runLabelJob returns or the per-order timeout
@@ -56,7 +67,7 @@ func (d *syncLabelDispatcher) Enqueue(orderID string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d.timeout)
 	defer cancel()
-	if err := runLabelJob(ctx, d.orders, d.ship, orderID); err != nil {
+	if err := runLabelJob(ctx, d.orders, d.ship, d.viacep, orderID, labelOverrides{}); err != nil {
 		log.Printf("label_job: order %s: %v (will retry via cron)", orderID, err)
 	}
 }
@@ -67,7 +78,7 @@ func (d *syncLabelDispatcher) Enqueue(orderID string) {
 // (tracking_attempts + tracking_last_error) so the cron retry loop has
 // state to back off against — and the error is returned so the
 // caller's logs aren't blank.
-func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, orderID string) error {
+func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, viacep *viaCepClient, orderID string, overrides labelOverrides) error {
 	if orders == nil {
 		return errors.New("label job: order store missing")
 	}
@@ -102,13 +113,38 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 		return wrapAndRecord(ctx, orders, orderID, "build packages", err)
 	}
 	vol, insurance := mergeVolumes(pkgs)
+
+	name := strings.TrimSpace(overrides.Name)
+	if name == "" {
+		name = strings.TrimSpace(o.Name)
+	}
+	address := strings.TrimSpace(overrides.Address)
+	if address == "" {
+		address = strings.TrimSpace(o.Address)
+	}
+
+	details, err := resolveAddressDetails(ctx, viacep, o.Zip, overrides.Details)
+	if err != nil {
+		return wrapAndRecord(ctx, orders, orderID, "viacep", err)
+	}
+
+	to := map[string]any{
+		"name":        name,
+		"email":       o.Email,
+		"address":     address,
+		"postal_code": digitsOnly(o.Zip),
+	}
+	if details.District != "" {
+		to["district"] = details.District
+	}
+	if details.City != "" {
+		to["city"] = details.City
+	}
+	if details.State != "" {
+		to["state_abbr"] = details.State
+	}
 	cart := map[string]any{
-		"to": map[string]any{
-			"name":        o.Name,
-			"email":       o.Email,
-			"address":     o.Address,
-			"postal_code": digitsOnly(o.Zip),
-		},
+		"to":              to,
 		"service":         o.ShippingSvcID,
 		"products":        buildCartProducts(o),
 		"volumes":         []any{vol},
@@ -191,6 +227,45 @@ func labelBackoff(attempts int) time.Duration {
 // it stops appearing in the cron sweep. Past this, the admin UI still
 // surfaces the order so an operator can fix the data and re-trigger.
 const maxLabelAttempts = 8
+
+// resolveAddressDetails merges operator-supplied overrides with a
+// ViaCEP lookup against the order's zip. The priority is:
+//   1. any field the operator passed explicitly (overrides.Details)
+//   2. ViaCEP lookup for anything missing
+//   3. leave field blank — SuperFrete will reject, and the caller
+//      records the failure for the admin UI
+// ViaCEP outages are not fatal when the operator has already supplied
+// a complete override; that's the manual-recovery path.
+func resolveAddressDetails(ctx context.Context, client *viaCepClient, zip string, overrides addressDetails) (addressDetails, error) {
+	out := overrides
+	if out.District != "" && out.City != "" && out.State != "" {
+		return out, nil
+	}
+	if client == nil {
+		return out, errors.New("address lookup unavailable")
+	}
+	lookup, err := client.Lookup(ctx, zip)
+	if err != nil {
+		// If the operator gave us at least city + state we still want
+		// to try shipping; district alone is rarely enforced by
+		// SuperFrete but we surface the ViaCEP error for observability.
+		if out.City != "" && out.State != "" {
+			log.Printf("label_job: viacep lookup failed for %s: %v (using overrides)", zip, err)
+			return out, nil
+		}
+		return out, err
+	}
+	if out.District == "" {
+		out.District = lookup.District
+	}
+	if out.City == "" {
+		out.City = lookup.City
+	}
+	if out.State == "" {
+		out.State = lookup.State
+	}
+	return out, nil
+}
 
 // buildPackagesFromOrder reconstructs the per-product package presets we
 // stored in the catalog at quote time. The order_items table is the

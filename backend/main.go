@@ -1000,8 +1000,9 @@ func main() {
 	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
 	mux.HandleFunc("/api/admin/upload", adminAuthFromCfg(adminCfg, handleAdminUpload()))
 	mux.HandleFunc("/api/admin/orders/pending-labels", adminAuthFromCfg(adminCfg, handleAdminPendingLabels(orders)))
-	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, labelTimeoutFromEnv())))
-	mux.HandleFunc("/api/internal/jobs/process-labels", handleProcessLabelsJob(internalCfg, orders, shipClient))
+	viacepClient := newViaCepClient()
+	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, viacepClient, labelTimeoutFromEnv())))
+	mux.HandleFunc("/api/internal/jobs/process-labels", handleProcessLabelsJob(internalCfg, orders, shipClient, viacepClient))
 	staticDir := strings.TrimSpace(os.Getenv("STATIC_DIR"))
 	mux.HandleFunc("/", staticOrNotFound(staticDir))
 
