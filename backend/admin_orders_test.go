@@ -196,6 +196,151 @@ func TestAdminRetryLabel_UnknownAction(t *testing.T) {
 	}
 }
 
+func TestAdminOrdersList_ReturnsRecipientDetails(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_list_a")
+	putPaidOrderForLabel(t, store, "ord_list_b")
+
+	h := adminAuth("adm", handleAdminOrdersList(store))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders?limit=10", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Count  int                `json:"count"`
+		Orders []adminOrderDetail `json:"orders"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Count < 2 {
+		t.Fatalf("want >=2 orders, got %d", got.Count)
+	}
+	// Items must come back populated for the dashboard to list the
+	// purchased products — that's the core contract of this endpoint.
+	found := false
+	for _, o := range got.Orders {
+		if o.OrderID == "ord_list_a" {
+			found = true
+			if len(o.Items) == 0 {
+				t.Errorf("expected items on ord_list_a, got 0")
+			}
+			if o.Name == "" || o.Email == "" {
+				t.Errorf("expected name+email on ord_list_a, got %+v", o)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("ord_list_a not in listing")
+	}
+}
+
+func TestAdminOrdersList_StatusFilter(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_paid_x")
+	putTestOrder(t, store, "ord_pending_y", "x@y.z", "card", 1000, 0)
+
+	h := adminAuth("adm", handleAdminOrdersList(store))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders?status=paid", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var got struct {
+		Count  int                `json:"count"`
+		Orders []adminOrderDetail `json:"orders"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	for _, o := range got.Orders {
+		if o.Status != "paid" {
+			t.Fatalf("status filter leaked %s (order %s)", o.Status, o.OrderID)
+		}
+	}
+}
+
+func TestAdminOrderDetail_Returns404ForMissing(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_nope", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rr.Code)
+	}
+}
+
+func TestAdminOrderDetail_IncludesItems(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_detail_a")
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_detail_a", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var got adminOrderDetail
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.OrderID != "ord_detail_a" {
+		t.Fatalf("orderId = %q", got.OrderID)
+	}
+	if len(got.Items) == 0 {
+		t.Error("expected items in detail response")
+	}
+}
+
+func TestAdminOrderDelete_RemovesRow(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_del")
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orders/ord_del", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+	_, ok, err := store.get(context.Background(), "ord_del")
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	if ok {
+		t.Fatal("order still present after DELETE")
+	}
+}
+
+func TestAdminOrderDelete_Returns404ForMissing(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orders/ord_nope", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rr.Code)
+	}
+}
+
 func TestAdminRetryLabel_MethodNotAllowed(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()

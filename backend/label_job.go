@@ -223,8 +223,20 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 		log.Printf("label_job: setStatus(%s): %v", orderID, err)
 	}
 	log.Printf("label_job: order %s shipped (sf=%s tracking=%s)", orderID, sfOrderID, trackingCode)
+	// Notify the customer via email (best-effort). Wired by main.go
+	// at startup; nil in tests and in deployments without Resend.
+	if h := labelSuccessHook; h != nil {
+		h(orderID)
+	}
 	return nil
 }
+
+// labelSuccessHook is invoked right after a label is successfully
+// generated and the order flipped to "shipped". Kept as a package-level
+// function pointer so runLabelJob's signature (and all its callers)
+// stay unchanged. main.go assigns a closure that fires the tracking
+// email via the emailWorker; tests leave it nil.
+var labelSuccessHook func(orderID string)
 
 // wrapAndRecord stamps the underlying error onto the order row and
 // returns it so the caller can log + propagate. Errors from the record

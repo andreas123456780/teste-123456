@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   adminApi,
   adminAuthApi,
   adminCouponsApi,
+  adminOrdersApi,
   type AdminCouponPayload,
+  type AdminOrder,
   type AdminProductPayload,
   type AdminStats,
 } from "../api";
@@ -18,7 +20,7 @@ import type { Coupon, Product } from "../types";
 // compare). The UI never ships privileged data statically.
 const TOKEN_STORAGE = "nast:admin-token:v1";
 
-type Tab = "dashboard" | "products" | "coupons";
+type Tab = "dashboard" | "orders" | "products" | "coupons";
 
 function emptyProduct(): AdminProductPayload {
   return {
@@ -253,6 +255,7 @@ export function AdminPage() {
       <nav className="mb-6 flex gap-2 border-b border-neutral-300">
         {([
           ["dashboard", "Dashboard"],
+          ["orders", "Pedidos"],
           ["products", "Produtos"],
           ["coupons", "Cupons"],
         ] as const).map(([id, label]) => {
@@ -275,6 +278,7 @@ export function AdminPage() {
       </nav>
 
       {tab === "dashboard" && <DashboardAdmin token={token} />}
+      {tab === "orders" && <OrdersAdmin token={token} />}
       {tab === "products" && <ProductsAdmin token={token} />}
       {tab === "coupons" && <CouponsAdmin token={token} />}
       </main>
@@ -597,6 +601,335 @@ function DailyRevenueChart({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ----- Orders tab -----
+
+function formatCpf(doc: string | undefined): string {
+  const d = (doc ?? "").replace(/\D/g, "");
+  if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  if (d.length === 14) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  return doc ?? "";
+}
+
+function formatFullAddress(o: AdminOrder): string {
+  const line1 = [o.address, o.addressNumber].filter(Boolean).join(", ");
+  const line1b = o.addressComplement ? `${line1} - ${o.addressComplement}` : line1;
+  const line2 = [o.district, o.city && o.state ? `${o.city}/${o.state}` : o.city]
+    .filter(Boolean)
+    .join(" · ");
+  const line3 = o.zip ? `CEP ${o.zip}` : "";
+  return [line1b, line2, line3].filter(Boolean).join("\n");
+}
+
+function OrdersAdmin({ token }: { token: string }) {
+  const [orders, setOrders] = useState<AdminOrder[] | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [err, setErr] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr("");
+    try {
+      const res = await adminOrdersApi.list(token, {
+        status: statusFilter || undefined,
+        limit: 100,
+      });
+      setOrders(res.orders);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [token, statusFilter]);
+
+  useEffect(() => {
+    // load() only touches state after the fetch resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
+
+  const selected = useMemo(
+    () => orders?.find((o) => o.orderId === selectedId) ?? null,
+    [orders, selectedId],
+  );
+
+  async function handleDelete(id: string) {
+    if (!window.confirm(`Apagar pedido ${id}? Esta ação é permanente.`)) return;
+    setBusyId(id);
+    try {
+      await adminOrdersApi.remove(token, id);
+      setSelectedId(null);
+      await load();
+    } catch (e) {
+      alert("Falha ao apagar: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleRetry(id: string) {
+    setBusyId(id);
+    try {
+      const res = await adminOrdersApi.retryLabel(token, id);
+      alert(
+        `Retry ok: status=${res.status}${
+          res.trackingCode ? ` · tracking=${res.trackingCode}` : ""
+        }`,
+      );
+      await load();
+    } catch (e) {
+      alert("Retry falhou: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Pedidos</h2>
+        <div className="flex items-center gap-2">
+          <label className="text-xs uppercase tracking-wide text-neutral-500">
+            status
+          </label>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm"
+          >
+            <option value="">(todos)</option>
+            <option value="pending_payment">pending_payment</option>
+            <option value="paid">paid</option>
+            <option value="shipped">shipped</option>
+            <option value="failed">failed</option>
+            <option value="canceled">canceled</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded border border-neutral-300 px-3 py-1 text-sm"
+          >
+            Recarregar
+          </button>
+        </div>
+      </header>
+
+      {err && <p className="text-sm text-red-600">{err}</p>}
+      {!orders && !err && <p className="text-sm text-neutral-500">Carregando…</p>}
+      {orders && orders.length === 0 && (
+        <p className="text-sm text-neutral-500">Nenhum pedido encontrado.</p>
+      )}
+
+      {orders && orders.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <div className="overflow-x-auto rounded border border-neutral-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500">
+                <tr>
+                  <th className="px-3 py-2">Pedido</th>
+                  <th className="px-3 py-2">Cliente</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((o) => {
+                  const active = o.orderId === selectedId;
+                  return (
+                    <tr
+                      key={o.orderId}
+                      onClick={() => setSelectedId(o.orderId)}
+                      className={`cursor-pointer border-t border-neutral-100 ${
+                        active ? "bg-neutral-100" : "hover:bg-neutral-50"
+                      }`}
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {o.orderId}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium">{o.name}</div>
+                        <div className="text-xs text-neutral-500">{o.email}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusBadge status={o.status} />
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {moneyBR(o.amountCents)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <aside className="rounded border border-neutral-200 p-4">
+            {!selected && (
+              <p className="text-sm text-neutral-500">
+                Selecione um pedido à esquerda para ver os detalhes.
+              </p>
+            )}
+            {selected && <OrderDetail
+              order={selected}
+              busy={busyId === selected.orderId}
+              onRetry={() => void handleRetry(selected.orderId)}
+              onDelete={() => void handleDelete(selected.orderId)}
+            />}
+          </aside>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function OrderDetail({
+  order,
+  busy,
+  onRetry,
+  onDelete,
+}: {
+  order: AdminOrder;
+  busy: boolean;
+  onRetry: () => void;
+  onDelete: () => void;
+}) {
+  const canRetryLabel = order.status === "paid" && !order.trackingCode;
+  return (
+    <div className="space-y-4">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-mono text-sm text-neutral-500">{order.orderId}</h3>
+          <h2 className="text-lg font-semibold">{order.name}</h2>
+          <p className="text-sm text-neutral-600">{order.email}</p>
+        </div>
+        <StatusBadge status={order.status} />
+      </header>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+        <dt className="text-xs uppercase text-neutral-500">CPF</dt>
+        <dd className="font-mono">{order.document ? formatCpf(order.document) : "—"}</dd>
+
+        <dt className="text-xs uppercase text-neutral-500">Pagamento</dt>
+        <dd className="capitalize">{order.paymentMethod}</dd>
+
+        <dt className="text-xs uppercase text-neutral-500">Total</dt>
+        <dd className="font-semibold">{moneyBR(order.amountCents)}</dd>
+
+        <dt className="text-xs uppercase text-neutral-500">Frete</dt>
+        <dd>
+          {moneyBR(order.shippingCents)}
+          {order.shippingServiceName ? ` · ${order.shippingServiceName}` : ""}
+        </dd>
+
+        {order.couponCode && (
+          <>
+            <dt className="text-xs uppercase text-neutral-500">Cupom</dt>
+            <dd>
+              {order.couponCode}
+              {order.discountCents ? ` (-${moneyBR(order.discountCents)})` : ""}
+            </dd>
+          </>
+        )}
+
+        {order.trackingCode && (
+          <>
+            <dt className="text-xs uppercase text-neutral-500">Rastreio</dt>
+            <dd>
+              <span className="font-mono">{order.trackingCode}</span>
+              {order.trackingUrl && (
+                <>
+                  {" "}
+                  <a
+                    href={order.trackingUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-700 underline"
+                  >
+                    rastrear
+                  </a>
+                </>
+              )}
+              {order.labelUrl && (
+                <>
+                  {" · "}
+                  <a
+                    href={order.labelUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-700 underline"
+                  >
+                    etiqueta
+                  </a>
+                </>
+              )}
+            </dd>
+          </>
+        )}
+
+        {order.trackingLastError && (
+          <>
+            <dt className="text-xs uppercase text-red-600">Erro da etiqueta</dt>
+            <dd className="text-red-700">{order.trackingLastError}</dd>
+          </>
+        )}
+      </dl>
+
+      <div>
+        <p className="text-xs uppercase text-neutral-500">Endereço</p>
+        <pre className="whitespace-pre-wrap rounded bg-neutral-50 p-2 text-sm">
+          {formatFullAddress(order)}
+        </pre>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs uppercase text-neutral-500">Itens</p>
+        <ul className="divide-y divide-neutral-200 rounded border border-neutral-200">
+          {order.items.length === 0 && (
+            <li className="px-3 py-2 text-sm text-neutral-500">
+              Sem itens registrados.
+            </li>
+          )}
+          {order.items.map((it, i) => (
+            <li key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+              <div>
+                <div className="font-medium">{it.productName}</div>
+                <div className="text-xs text-neutral-500">
+                  {[it.size && `tam ${it.size}`, it.color].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              <div className="text-right">
+                <div>{it.quantity}×</div>
+                <div className="text-xs text-neutral-500">
+                  {moneyBR(it.unitPriceCents)}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {canRetryLabel && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRetry}
+            className="rounded bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            {busy ? "Gerando…" : "Gerar etiqueta"}
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onDelete}
+          className="rounded border border-red-600 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
+        >
+          {busy ? "Apagando…" : "Apagar pedido"}
+        </button>
+      </div>
     </div>
   );
 }
