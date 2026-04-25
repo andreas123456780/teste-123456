@@ -23,28 +23,31 @@ import (
 // been created (pending_payment) or transitioned since (paid, failed,
 // shipped). We persist every field below plus the per-line items.
 type pendingOrder struct {
-	ID              string
-	Name            string
-	Email           string
-	Address         string
-	Zip             string
-	PaymentMethod   string
-	Status          string
-	TotalCents      int
-	ShippingCents   int
-	AmountCents     int
-	ShippingSvcID   int
-	ShippingSvcName string
-	PaymentIntentID string
-	TrackingCode    string
-	TrackingURL     string
-	LabelURL        string
-	SuperfreteID    string
-	CouponCode      string
-	DiscountCents   int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Items           []orderItem
+	ID                  string
+	Name                string
+	Email               string
+	Address             string
+	Zip                 string
+	PaymentMethod       string
+	Status              string
+	TotalCents          int
+	ShippingCents       int
+	AmountCents         int
+	ShippingSvcID       int
+	ShippingSvcName     string
+	PaymentIntentID     string
+	TrackingCode        string
+	TrackingURL         string
+	LabelURL            string
+	SuperfreteID        string
+	CouponCode          string
+	DiscountCents       int
+	TrackingAttempts    int
+	TrackingLastError   string
+	TrackingAttemptedAt time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Items               []orderItem
 }
 
 type orderItem struct {
@@ -129,6 +132,7 @@ func (s *orderStore) get(ctx context.Context, id string) (*pendingOrder, bool, e
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		coupon_code, discount_cents,
+		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at
 	FROM orders WHERE id = ?`), id)
 	o, err := scanOrder(row)
@@ -155,6 +159,7 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		coupon_code, discount_cents,
+		tracking_attempts, tracking_last_error, tracking_attempted_at,
 		created_at, updated_at
 	FROM orders WHERE payment_intent_id = ? LIMIT 1`), piID)
 	o, err := scanOrder(row)
@@ -198,17 +203,94 @@ func (s *orderStore) setStatus(ctx context.Context, orderID, status string) erro
 
 // setTracking persists the SuperFrete-generated tracking metadata for an
 // order. Called from the webhook after a successful label generation.
+// On success we also clear any prior failure bookkeeping so the row
+// stops appearing in /api/admin/orders/pending-labels.
 func (s *orderStore) setTracking(ctx context.Context, orderID, code, url, labelURL, superfreteID string) error {
+	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, rb(`UPDATE orders SET
-		tracking_code = ?, tracking_url = ?, label_url = ?, superfrete_order_id = ?, updated_at = ?
+		tracking_code = ?, tracking_url = ?, label_url = ?, superfrete_order_id = ?,
+		tracking_last_error = NULL, tracking_attempted_at = ?,
+		updated_at = ?
 		WHERE id = ?`),
 		nullableStr(code), nullableStr(url), nullableStr(labelURL),
-		nullableStr(superfreteID), time.Now().UTC(), orderID,
+		nullableStr(superfreteID), now, now, orderID,
 	)
 	if err != nil {
 		return fmt.Errorf("set tracking: %w", err)
 	}
 	return nil
+}
+
+// recordTrackingFailure increments the per-order attempt counter and
+// stores the latest error so the admin UI can show why an order is
+// stuck. The cron-driven retry path uses tracking_attempts +
+// tracking_attempted_at to compute backoff.
+func (s *orderStore) recordTrackingFailure(ctx context.Context, orderID, errMsg string) error {
+	const maxErr = 500
+	if len(errMsg) > maxErr {
+		errMsg = errMsg[:maxErr]
+	}
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, rb(`UPDATE orders SET
+		tracking_attempts = tracking_attempts + 1,
+		tracking_last_error = ?,
+		tracking_attempted_at = ?,
+		updated_at = ?
+		WHERE id = ?`),
+		nullableStr(errMsg), now, now, orderID,
+	)
+	if err != nil {
+		return fmt.Errorf("record tracking failure: %w", err)
+	}
+	return nil
+}
+
+// listPendingLabels returns paid orders that still don't have a
+// tracking_code, ordered by the next retry deadline. The caller passes
+// a cutoff (now() minus the smallest backoff) so freshly-attempted
+// rows are skipped, plus a maxAttempts cap so we don't burn cycles on
+// permanently broken orders. Used by the cron job and by the admin
+// listing endpoint (with a generous cutoff).
+func (s *orderStore) listPendingLabels(ctx context.Context, cutoff time.Time, maxAttempts, limit int) ([]*pendingOrder, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	rows, err := s.db.QueryContext(ctx, rb(`SELECT
+		id, name, email, address, zip, payment_method, status,
+		total_cents, shipping_cents, amount_cents,
+		shipping_service_id, shipping_service_name,
+		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents,
+		tracking_attempts, tracking_last_error, tracking_attempted_at,
+		created_at, updated_at
+	FROM orders
+	WHERE status = 'paid'
+	  AND tracking_code IS NULL
+	  AND tracking_attempts < ?
+	  AND (tracking_attempted_at IS NULL OR tracking_attempted_at <= ?)
+	ORDER BY tracking_attempts ASC, created_at ASC
+	LIMIT ?`), maxAttempts, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending labels: %w", err)
+	}
+	defer rows.Close()
+	var out []*pendingOrder
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan pending label: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending labels: %w", err)
+	}
+	for _, o := range out {
+		if err := s.loadItems(ctx, o); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // recordEvent appends a row to payment_events. The payload is kept as
@@ -264,7 +346,8 @@ func (s *orderStore) loadItems(ctx context.Context, o *pendingOrder) error {
 func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	var o pendingOrder
 	var shipID sql.NullInt64
-	var shipName, piID, code, url, labelURL, supID, couponCode sql.NullString
+	var shipName, piID, code, url, labelURL, supID, couponCode, lastErr sql.NullString
+	var attemptedAt sql.NullTime
 	err := row.Scan(
 		&o.ID, &o.Name, &o.Email, &o.Address, &o.Zip,
 		&o.PaymentMethod, &o.Status,
@@ -272,6 +355,7 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 		&shipID, &shipName,
 		&piID, &code, &url, &labelURL, &supID,
 		&couponCode, &o.DiscountCents,
+		&o.TrackingAttempts, &lastErr, &attemptedAt,
 		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
@@ -287,6 +371,10 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	o.LabelURL = labelURL.String
 	o.SuperfreteID = supID.String
 	o.CouponCode = couponCode.String
+	o.TrackingLastError = lastErr.String
+	if attemptedAt.Valid {
+		o.TrackingAttemptedAt = attemptedAt.Time
+	}
 	return &o, nil
 }
 
