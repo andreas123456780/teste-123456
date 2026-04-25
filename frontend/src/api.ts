@@ -11,12 +11,21 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
+    // credentials:"include" is required for the /api/auth/* flows —
+    // the session is a cookie set by the backend and has to travel
+    // across the frontend→backend CORS boundary in prod. For
+    // endpoints that don't need auth it's still safe: the browser
+    // only sends the cookie when the backend has ACAO echoing the
+    // Origin and ACAC=true, which our CORS middleware only does for
+    // the whitelisted origins.
+    credentials: "include",
     ...init,
     headers: {
       ...(init?.body != null ? { "Content-Type": "application/json" } : {}),
       ...(init?.headers ?? {}),
     },
   });
+  if (res.status === 204) return undefined as unknown as T;
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${text || res.statusText}`);
@@ -94,6 +103,42 @@ export const api = {
     ),
   getOrderByToken: (token: string) =>
     request<PublicOrder>(`/api/orders/${encodeURIComponent(token)}`),
+};
+
+// AuthUser mirrors backend authMeResponse. Returned by every
+// /api/auth/* endpoint on success and cached client-side by the
+// useAuth hook.
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  emailVerified: boolean;
+  hasPassword: boolean;
+  hasGoogle: boolean;
+};
+
+// authApi wraps the customer-facing auth endpoints. Every call relies
+// on the session cookie already being attached by credentials:"include"
+// in request().
+export const authApi = {
+  signup: (payload: { name: string; email: string; password: string }) =>
+    request<AuthUser>(`/api/auth/signup`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  login: (payload: { email: string; password: string }) =>
+    request<AuthUser>(`/api/auth/login`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  logout: () =>
+    request<{ status: string }>(`/api/auth/logout`, { method: "POST" }),
+  me: () => request<AuthUser>(`/api/auth/me`),
+  // googleStartUrl returns the URL the browser should navigate to in
+  // order to begin the Google OAuth dance. Kept as a helper (rather
+  // than a location.assign) so components can decide whether to open
+  // it in a new tab or the same one.
+  googleStartUrl: () => `${API_BASE}/api/auth/google/start`,
 };
 
 // Admin API — callers supply the X-Admin-Token header. Token is stored

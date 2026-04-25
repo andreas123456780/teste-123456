@@ -25,6 +25,7 @@ import { Privacy } from "./pages/Privacy";
 import { Terms } from "./pages/Terms";
 import { Returns } from "./pages/Returns";
 import { AdminPage } from "./pages/Admin";
+import { AuthPage } from "./pages/Auth";
 
 const WHATSAPP_NUMBER = "5511910859392";
 const SUPPORT_EMAIL = "contato@nast.com.br";
@@ -41,7 +42,9 @@ type Route =
   | { kind: "privacy" }
   | { kind: "terms" }
   | { kind: "returns" }
-  | { kind: "admin" };
+  | { kind: "admin" }
+  | { kind: "login" }
+  | { kind: "signup" };
 
 function parseRoute(pathname: string): Route {
   const orderMatch = pathname.match(/^\/pedido\/([^/?#]+)\/?$/);
@@ -57,6 +60,12 @@ function parseRoute(pathname: string): Route {
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { kind: "admin" };
+  }
+  if (pathname === "/login" || pathname === "/login/") {
+    return { kind: "login" };
+  }
+  if (pathname === "/cadastro" || pathname === "/cadastro/") {
+    return { kind: "signup" };
   }
   return { kind: "home" };
 }
@@ -104,6 +113,18 @@ function App() {
   if (route.kind === "admin") {
     return <AdminPage />;
   }
+  if (route.kind === "login" || route.kind === "signup") {
+    // Preserve ?next=/some/path so the auth page sends the user back
+    // where they came from after a successful login.
+    const next = new URL(window.location.href).searchParams.get("next");
+    return (
+      <AuthPage
+        mode={route.kind}
+        whatsAppNumber={WHATSAPP_NUMBER}
+        redirectTo={next || "/"}
+      />
+    );
+  }
   return <Home />;
 }
 
@@ -112,7 +133,14 @@ function Home() {
   const [loading, setLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
-  const [cartOpen, setCartOpen] = useState(false);
+  // `?checkout=1` is the signal the auth page tacks onto its
+  // redirect: it means "I just came back from logging in, open the
+  // cart so I can finish paying." Parsed once on mount to avoid a
+  // reopen loop.
+  const [cartOpen, setCartOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URL(window.location.href).searchParams.get("checkout") === "1";
+  });
   const [modal, setModal] = useState<Product | null>(null);
   const [modalPreferredSize, setModalPreferredSize] = useState<
     string | undefined
