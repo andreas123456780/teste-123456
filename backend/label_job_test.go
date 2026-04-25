@@ -431,6 +431,34 @@ func TestRunLabelJob_SendsDistrictCityStateToSuperFrete(t *testing.T) {
 	}
 }
 
+// TestRunLabelJob_DocumentOverrideReachesSuperFrete covers recipient
+// CPF/CNPJ, which SuperFrete now requires on most accounts. Digits-
+// only normalisation is validated so the operator can paste
+// "123.456.789-00" or "12345678900" and both work.
+func TestRunLabelJob_DocumentOverrideReachesSuperFrete(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_doc")
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_doc", labelOverrides{
+		Document: "123.456.789-00",
+	})
+	if err != nil {
+		t.Fatalf("runLabelJob: %v", err)
+	}
+	to, _ := fs.cartCapturedFields[0]["to"].(map[string]any)
+	if got, _ := to["document"].(string); got != "12345678900" {
+		t.Fatalf("to.document = %q, want 12345678900 (digits-only)", got)
+	}
+}
+
 // TestRunLabelJob_NameOverrideReachesSuperFrete covers the manual-
 // recovery path where an operator retries a stuck order with a
 // corrected recipient name (SuperFrete rejects first-name-only).

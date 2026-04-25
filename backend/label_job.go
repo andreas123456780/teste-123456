@@ -48,9 +48,10 @@ func newSyncLabelDispatcher(orders *orderStore, ship *shippingClient, timeout ti
 // operator can patch a bad recipient name (or manually-entered address
 // line) without having to edit the underlying order row first.
 type labelOverrides struct {
-	Name    string
-	Address string
-	Details addressDetails // empty fields fall back to ViaCEP
+	Name     string
+	Address  string
+	Document string         // CPF or CNPJ, digits only preferred; SuperFrete requires this on most accounts
+	Details  addressDetails // empty fields fall back to ViaCEP
 }
 
 // Enqueue blocks until runLabelJob returns or the per-order timeout
@@ -133,6 +134,9 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 		"email":       o.Email,
 		"address":     address,
 		"postal_code": digitsOnly(o.Zip),
+	}
+	if doc := digitsOnly(overrides.Document); doc != "" {
+		to["document"] = doc
 	}
 	if details.District != "" {
 		to["district"] = details.District
