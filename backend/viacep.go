@@ -38,6 +38,17 @@ type addressDetails struct {
 	State    string
 }
 
+// cepLookupResult is returned by the /api/cep/{cep} endpoint. The
+// checkout form uses it to auto-fill the address fields in one shot
+// after the customer types a CEP.
+type cepLookupResult struct {
+	Cep        string `json:"cep"`
+	Logradouro string `json:"logradouro"`
+	Bairro     string `json:"bairro"`
+	Cidade     string `json:"cidade"`
+	Uf         string `json:"uf"`
+}
+
 type viaCepClient struct {
 	http    *http.Client
 	baseURL string
@@ -105,4 +116,97 @@ func (c *viaCepClient) Lookup(ctx context.Context, cep string) (addressDetails, 
 		return addressDetails{}, errViaCepNotFound
 	}
 	return out, nil
+}
+
+// LookupFull is a superset of Lookup that also returns the logradouro
+// (street name). The checkout form needs it to pre-fill the address
+// field after a CEP is typed; label generation only cares about the
+// three Lookup() returns, so the cheaper call stays available for
+// backend jobs.
+func (c *viaCepClient) LookupFull(ctx context.Context, cep string) (cepLookupResult, error) {
+	cep = digitsOnly(cep)
+	if len(cep) != 8 {
+		return cepLookupResult{}, errors.New("viacep: invalid CEP")
+	}
+	if c == nil {
+		return cepLookupResult{}, errors.New("viacep: client not initialised")
+	}
+	url := fmt.Sprintf("%s/ws/%s/json/", strings.TrimRight(c.baseURL, "/"), cep)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return cepLookupResult{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return cepLookupResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return cepLookupResult{}, fmt.Errorf("viacep: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var v viacepAddress
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return cepLookupResult{}, fmt.Errorf("viacep: decode: %w", err)
+	}
+	if v.Erro != nil {
+		switch e := v.Erro.(type) {
+		case bool:
+			if e {
+				return cepLookupResult{}, errViaCepNotFound
+			}
+		case string:
+			if strings.EqualFold(e, "true") {
+				return cepLookupResult{}, errViaCepNotFound
+			}
+		}
+	}
+	out := cepLookupResult{
+		Cep:        cep,
+		Logradouro: strings.TrimSpace(v.Logradouro),
+		Bairro:     strings.TrimSpace(v.Bairro),
+		Cidade:     strings.TrimSpace(v.Localidade),
+		Uf:         strings.ToUpper(strings.TrimSpace(v.Uf)),
+	}
+	if out.Cidade == "" && out.Uf == "" && out.Bairro == "" {
+		return cepLookupResult{}, errViaCepNotFound
+	}
+	return out, nil
+}
+
+// handleCepLookup exposes ViaCEP through our own origin so the
+// browser doesn't have to deal with CORS. The zip is parsed from the
+// last path segment — we never accept query params because a naive
+// proxy is a classic SSRF vector. Digits are extracted defensively
+// even though only /api/cep/{8-digit-string} should reach here.
+func handleCepLookup(client *viaCepClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		const prefix = "/api/cep/"
+		cep := strings.TrimPrefix(r.URL.Path, prefix)
+		cep = digitsOnly(cep)
+		if len(cep) != 8 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CEP inválido"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		res, err := client.LookupFull(ctx, cep)
+		if errors.Is(err, errViaCepNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "CEP não encontrado"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "lookup failed"})
+			return
+		}
+		// Browsers will cache this for the life of the form; the
+		// server side cache is unnecessary because ViaCEP is fast.
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		writeJSON(w, http.StatusOK, res)
+	}
 }

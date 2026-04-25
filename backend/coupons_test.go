@@ -168,15 +168,10 @@ func TestCheckout_WithCoupon_AppliesAndIncrements(t *testing.T) {
 	_ = validateCouponFields(&c)
 	_ = coupons.upsert(context.Background(), &c)
 
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas",
-		Email:         "a@example.com",
-		Address:       "Rua X, 1",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-		CouponCode:    "nast10",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "card"
+	body.CouponCode = "nast10"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -209,15 +204,10 @@ func TestCheckout_WithExpiredCoupon_Rejects(t *testing.T) {
 	_ = validateCouponFields(&c)
 	_ = coupons.upsert(context.Background(), &c)
 
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas",
-		Email:         "a@example.com",
-		Address:       "Rua X",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-		CouponCode:    "OLDIE",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "card"
+	body.CouponCode = "OLDIE"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))

@@ -64,7 +64,13 @@ type CheckoutRequest struct {
 	Items         []CartItem        `json:"items"`
 	Name          string            `json:"name"`
 	Email         string            `json:"email"`
-	Address       string            `json:"address"`
+	Document      string            `json:"document"` // CPF (11) or CNPJ (14); non-digits ignored
+	Address       string            `json:"address"`  // logradouro (rua/avenida)
+	AddressNumber string            `json:"addressNumber"`
+	AddressComplement string        `json:"addressComplement,omitempty"`
+	District      string            `json:"district"` // bairro
+	City          string            `json:"city"`
+	State         string            `json:"state"` // UF, 2 letters
 	ZipCode       string            `json:"zipCode"`
 	PaymentMethod string            `json:"paymentMethod"`
 	Shipping      *CheckoutShipping `json:"shipping,omitempty"`
@@ -578,6 +584,72 @@ func safeString(s string, max int) (string, bool) {
 	return s, true
 }
 
+// validateFullName rejects single-word names. SuperFrete refuses cart
+// payloads where to.name is a single token (e.g. "João"), so we enforce
+// the rule up front instead of discovering it at label-generation time.
+// Accents, apostrophes and hyphens are allowed; extra whitespace between
+// words is collapsed.
+func validateFullName(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 || len(s) > 120 {
+		return "", false
+	}
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return "", false
+	}
+	for _, f := range fields {
+		if len(f) < 2 {
+			return "", false
+		}
+	}
+	return strings.Join(fields, " "), true
+}
+
+// validateCPForCNPJ accepts a CPF (11 digits) or CNPJ (14 digits) and
+// returns the digits-only form. Length is the only structural check —
+// the upstream SuperFrete / Stripe stacks will reject checksum-invalid
+// numbers, and rejecting here risks locking out legitimate numbers
+// whose checksum library disagrees. Keeps the door open for CNPJ-based
+// orders (small businesses) alongside the normal CPF customers.
+func validateCPForCNPJ(s string) (string, bool) {
+	d := digitsOnly(s)
+	if len(d) != 11 && len(d) != 14 {
+		return "", false
+	}
+	// Reject the trivial repeated-digit strings (e.g. 00000000000) that
+	// are syntactically valid but never belong to a real document.
+	allSame := true
+	for i := 1; i < len(d); i++ {
+		if d[i] != d[0] {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return "", false
+	}
+	return d, true
+}
+
+// validateUF checks that s is a recognised 2-letter Brazilian state
+// abbreviation (case-insensitive). The SuperFrete API rejects payloads
+// where to.state_abbr is anything else, and the checkout form's
+// autocomplete should only ever send valid UFs — but defense in depth.
+func validateUF(s string) (string, bool) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if len(s) != 2 {
+		return "", false
+	}
+	switch s {
+	case "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA",
+		"MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN",
+		"RS", "RO", "RR", "SC", "SP", "SE", "TO":
+		return s, true
+	}
+	return "", false
+}
+
 // ----- Handlers -----
 
 func handleProducts(store *productsStore) http.HandlerFunc {
@@ -642,9 +714,9 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid item count"})
 			return
 		}
-		name, ok := safeString(req.Name, 120)
+		name, ok := validateFullName(req.Name)
 		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid name"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nome completo obrigatório"})
 			return
 		}
 		email := strings.TrimSpace(req.Email)
@@ -652,14 +724,54 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
 			return
 		}
+		document, ok := validateCPForCNPJ(req.Document)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CPF/CNPJ inválido"})
+			return
+		}
 		address, ok := safeString(req.Address, 240)
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid address"})
 			return
 		}
+		addressNumber, ok := safeString(req.AddressNumber, 24)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "número do endereço obrigatório"})
+			return
+		}
+		// Complement is optional; empty is fine, but if present it has to
+		// pass the safe-string check to keep control characters out.
+		addressComplement := strings.TrimSpace(req.AddressComplement)
+		if addressComplement != "" {
+			var okC bool
+			addressComplement, okC = safeString(addressComplement, 120)
+			if !okC {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "complemento inválido"})
+				return
+			}
+		}
+		district, ok := safeString(req.District, 120)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bairro obrigatório"})
+			return
+		}
+		city, ok := safeString(req.City, 120)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidade obrigatória"})
+			return
+		}
+		state, ok := validateUF(req.State)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "UF inválida"})
+			return
+		}
 		zip, ok := safeString(req.ZipCode, 16)
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zip"})
+			return
+		}
+		if len(digitsOnly(zip)) != 8 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CEP inválido"})
 			return
 		}
 		payment := strings.TrimSpace(strings.ToLower(req.PaymentMethod))
@@ -784,22 +896,28 @@ func handleCheckout(orders *orderStore, products *productsStore, coupons *coupon
 		}
 		amount := finalSubtotal + finalShipping
 		order := &pendingOrder{
-			ID:              randomID("ord_"),
-			Name:            name,
-			Email:           email,
-			Address:         address,
-			Zip:             zip,
-			TotalCents:      finalSubtotal,
-			ShippingCents:   finalShipping,
-			AmountCents:     amount,
-			ShippingSvcID:   shipServiceID,
-			ShippingSvcName: shipServiceName,
-			PaymentMethod:   payment,
-			Status:          "pending_payment",
-			CouponCode:      appliedCode,
-			DiscountCents:   discountCents,
-			CreatedAt:       time.Now().UTC(),
-			Items:           items,
+			ID:                randomID("ord_"),
+			Name:              name,
+			Email:             email,
+			Document:          document,
+			Address:           address,
+			AddressNumber:     addressNumber,
+			AddressComplement: addressComplement,
+			District:          district,
+			City:              city,
+			State:             state,
+			Zip:               zip,
+			TotalCents:        finalSubtotal,
+			ShippingCents:     finalShipping,
+			AmountCents:       amount,
+			ShippingSvcID:     shipServiceID,
+			ShippingSvcName:   shipServiceName,
+			PaymentMethod:     payment,
+			Status:            "pending_payment",
+			CouponCode:        appliedCode,
+			DiscountCents:     discountCents,
+			CreatedAt:         time.Now().UTC(),
+			Items:             items,
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -987,6 +1105,7 @@ func main() {
 	mux.HandleFunc("/api/shipping/quote", handleShippingQuote(shipClient, shipCache))
 	mux.HandleFunc("/api/shipping/label", handleShippingLabel(shipClient))
 	mux.HandleFunc("/api/shipping/track/", handleShippingTrack(shipClient))
+	mux.HandleFunc("/api/cep/", handleCepLookup(newViaCepClient()))
 	igClient := newInstagramClient()
 	if !igClient.configured() {
 		log.Printf("instagram: INSTAGRAM_ACCESS_TOKEN + INSTAGRAM_USER_ID not set — feed widget will be hidden")

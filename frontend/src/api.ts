@@ -46,7 +46,13 @@ export const api = {
     items: { productId: string; quantity: number; size: string; color: string }[];
     name: string;
     email: string;
+    document: string;
     address: string;
+    addressNumber: string;
+    addressComplement?: string;
+    district: string;
+    city: string;
+    state: string;
     zipCode: string;
     paymentMethod: "pix" | "card";
     shipping?: { serviceId: number; serviceName: string; priceCents: number };
@@ -56,6 +62,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  lookupCep: (cep: string) =>
+    request<{
+      cep: string;
+      logradouro: string;
+      bairro: string;
+      cidade: string;
+      uf: string;
+    }>(`/api/cep/${encodeURIComponent(cep.replace(/\D/g, ""))}`),
   validateCoupon: (payload: {
     code: string;
     subtotalCents: number;

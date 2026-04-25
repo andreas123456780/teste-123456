@@ -103,14 +103,9 @@ func TestCheckout_ValidCard(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 2, Size: "M", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua das Flores, 123",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 2, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "card"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -144,14 +139,9 @@ func TestCheckout_ValidPix(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua das Flores, 123",
-		ZipCode:       "01000-000",
-		PaymentMethod: "pix",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "pix"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -172,18 +162,13 @@ func TestCheckout_WithShipping(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua das Flores, 123",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-		Shipping: &CheckoutShipping{
-			ServiceID:   1,
-			ServiceName: "PAC",
-			PriceCents:  2199,
-		},
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "card"
+	body.Shipping = &CheckoutShipping{
+		ServiceID:   1,
+		ServiceName: "PAC",
+		PriceCents:  2199,
 	}
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
@@ -214,14 +199,9 @@ func TestCheckout_RejectsOutOfStockSize(t *testing.T) {
 		t.Fatalf("drain: %v", err)
 	}
 
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua das Flores, 123",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "card"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -245,14 +225,9 @@ func TestCheckout_RejectsUnknownSize(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "XXL", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua das Flores, 123",
-		ZipCode:       "01000-000",
-		PaymentMethod: "card",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "XXL", Color: "preto"}}
+	body.PaymentMethod = "card"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -266,14 +241,9 @@ func TestCheckout_InvalidPaymentMethod(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:         []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}},
-		Name:          "Andreas Teste",
-		Email:         "andreas@example.com",
-		Address:       "Rua 1",
-		ZipCode:       "01000",
-		PaymentMethod: "crypto",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1, Size: "M", Color: "preto"}}
+	body.PaymentMethod = "crypto"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))
@@ -287,13 +257,9 @@ func TestCheckout_InvalidEmail(t *testing.T) {
 	orders, db, cleanup := newTestStore(t)
 	defer cleanup()
 	prods := newTestProducts(t, db)
-	body := CheckoutRequest{
-		Items:   []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1}},
-		Name:    "x",
-		Email:   "not-an-email",
-		Address: "Rua 1",
-		ZipCode: "01000",
-	}
+	body := validCheckoutDefaults()
+	body.Items = []CartItem{{ProductID: "p-tee-bw-black", Quantity: 1}}
+	body.Email = "not-an-email"
 	b, _ := json.Marshal(body)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/checkout", bytes.NewReader(b))

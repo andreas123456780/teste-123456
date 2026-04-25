@@ -28,6 +28,17 @@ type pendingOrder struct {
 	Email               string
 	Address             string
 	Zip                 string
+	// Recipient fields required by SuperFrete. Populated for orders
+	// placed after the checkout form redesign; older orders default to
+	// empty strings and rely on ViaCEP / operator overrides at retry
+	// time. All values are plain strings to match the Postgres schema
+	// (TEXT NOT NULL DEFAULT '').
+	Document            string // CPF (11) or CNPJ (14), digits only stored
+	AddressNumber       string
+	AddressComplement   string
+	District            string
+	City                string
+	State               string // UF, uppercase
 	PaymentMethod       string
 	Status              string
 	TotalCents          int
@@ -86,14 +97,18 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, rb(`INSERT INTO orders(
-		id, name, email, address, zip, payment_method, status,
+		id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
 		coupon_code, discount_cents,
 		created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
-		o.ID, o.Name, o.Email, o.Address, o.Zip, o.PaymentMethod, o.Status,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+		o.ID, o.Name, o.Email, o.Address, o.Zip,
+		o.Document, o.AddressNumber, o.AddressComplement, o.District, o.City, o.State,
+		o.PaymentMethod, o.Status,
 		o.TotalCents, o.ShippingCents, o.AmountCents,
 		nullableInt(o.ShippingSvcID), nullableStr(o.ShippingSvcName),
 		nullableStr(o.PaymentIntentID), nullableStr(o.TrackingCode),
@@ -127,7 +142,9 @@ func (s *orderStore) create(ctx context.Context, o *pendingOrder) error {
 // not found so callers don't need to distinguish ErrNoRows.
 func (s *orderStore) get(ctx context.Context, id string) (*pendingOrder, bool, error) {
 	row := s.db.QueryRowContext(ctx, rb(`SELECT
-		id, name, email, address, zip, payment_method, status,
+		id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
@@ -154,7 +171,9 @@ func (s *orderStore) byPaymentIntent(ctx context.Context, piID string) (*pending
 		return nil, false, nil
 	}
 	row := s.db.QueryRowContext(ctx, rb(`SELECT
-		id, name, email, address, zip, payment_method, status,
+		id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
@@ -256,7 +275,9 @@ func (s *orderStore) listPendingLabels(ctx context.Context, cutoff time.Time, ma
 		limit = 25
 	}
 	rows, err := s.db.QueryContext(ctx, rb(`SELECT
-		id, name, email, address, zip, payment_method, status,
+		id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
 		total_cents, shipping_cents, amount_cents,
 		shipping_service_id, shipping_service_name,
 		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
@@ -350,6 +371,8 @@ func scanOrder(row interface{ Scan(...any) error }) (*pendingOrder, error) {
 	var attemptedAt sql.NullTime
 	err := row.Scan(
 		&o.ID, &o.Name, &o.Email, &o.Address, &o.Zip,
+		&o.Document, &o.AddressNumber, &o.AddressComplement,
+		&o.District, &o.City, &o.State,
 		&o.PaymentMethod, &o.Status,
 		&o.TotalCents, &o.ShippingCents, &o.AmountCents,
 		&shipID, &shipName,

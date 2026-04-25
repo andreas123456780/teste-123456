@@ -119,14 +119,48 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 	if name == "" {
 		name = strings.TrimSpace(o.Name)
 	}
+	// The on-disk `address` column is the logradouro only for orders
+	// created after the checkout form redesign. For legacy rows it
+	// contains a free-text "rua + número + complemento" blob, so we
+	// ship that as-is when the structured columns are empty.
 	address := strings.TrimSpace(overrides.Address)
 	if address == "" {
 		address = strings.TrimSpace(o.Address)
+		if n := strings.TrimSpace(o.AddressNumber); n != "" {
+			address = address + ", " + n
+			if c := strings.TrimSpace(o.AddressComplement); c != "" {
+				address = address + " - " + c
+			}
+		}
 	}
 
-	details, err := resolveAddressDetails(ctx, viacep, o.Zip, overrides.Details)
+	// Prefer override > stored column > ViaCEP lookup for the
+	// address detail fields. Most new orders already have all three
+	// filled by the checkout form, so ViaCEP becomes a pure fallback.
+	storedDetails := addressDetails{
+		District: strings.TrimSpace(o.District),
+		City:     strings.TrimSpace(o.City),
+		State:    strings.ToUpper(strings.TrimSpace(o.State)),
+	}
+	mergedOverride := overrides.Details
+	if mergedOverride.District == "" {
+		mergedOverride.District = storedDetails.District
+	}
+	if mergedOverride.City == "" {
+		mergedOverride.City = storedDetails.City
+	}
+	if mergedOverride.State == "" {
+		mergedOverride.State = storedDetails.State
+	}
+	details, err := resolveAddressDetails(ctx, viacep, o.Zip, mergedOverride)
 	if err != nil {
 		return wrapAndRecord(ctx, orders, orderID, "viacep", err)
+	}
+
+	// CPF/CNPJ: override wins, then stored column.
+	document := digitsOnly(overrides.Document)
+	if document == "" {
+		document = digitsOnly(o.Document)
 	}
 
 	to := map[string]any{
@@ -135,8 +169,8 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 		"address":     address,
 		"postal_code": digitsOnly(o.Zip),
 	}
-	if doc := digitsOnly(overrides.Document); doc != "" {
-		to["document"] = doc
+	if document != "" {
+		to["document"] = document
 	}
 	if details.District != "" {
 		to["district"] = details.District
