@@ -133,7 +133,17 @@ function Home() {
     api
       .listProducts()
       .then((list) => {
-        if (!cancelled && list.length > 0) setProducts(list);
+        if (cancelled || list.length === 0) return;
+        setProducts(list);
+        // Drop cart lines whose product no longer exists in the
+        // catalog — e.g. an admin-deleted product still cached in
+        // localStorage. Otherwise the checkout throws "unknown
+        // product" on submit with no recovery path for the customer.
+        const ids = new Set(list.map((p) => p.id));
+        setCart((prev) => {
+          const next = prev.filter((c) => ids.has(c.product.id));
+          return next.length === prev.length ? prev : next;
+        });
       })
       .catch(() => {
         /* fallback already loaded */

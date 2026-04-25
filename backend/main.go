@@ -1077,6 +1077,11 @@ func main() {
 	if emailCfg.APIKey == "" {
 		log.Printf("Resend: RESEND_API_KEY not set — confirmation emails disabled")
 	}
+	// Fire the "order shipped + tracking" email on every successful
+	// runLabelJob, regardless of which path triggered it (webhook
+	// dispatcher, admin retry, or cron). Best-effort: any failure is
+	// logged by the worker and never bubbled up to the caller.
+	labelSuccessHook = emailWrk.EnqueueTracking
 
 	internalCfg := loadInternalJobsConfig()
 	if internalCfg.token == "" {
@@ -1118,6 +1123,7 @@ func main() {
 	mux.HandleFunc("/api/admin/coupons/", adminAuthFromCfg(adminCfg, handleAdminCouponByCode(coupons)))
 	mux.HandleFunc("/api/admin/stats", adminAuthFromCfg(adminCfg, handleAdminStats(db)))
 	mux.HandleFunc("/api/admin/upload", adminAuthFromCfg(adminCfg, handleAdminUpload()))
+	mux.HandleFunc("/api/admin/orders", adminAuthFromCfg(adminCfg, handleAdminOrdersList(orders)))
 	mux.HandleFunc("/api/admin/orders/pending-labels", adminAuthFromCfg(adminCfg, handleAdminPendingLabels(orders)))
 	viacepClient := newViaCepClient()
 	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, viacepClient, labelTimeoutFromEnv())))

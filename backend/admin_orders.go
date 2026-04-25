@@ -2,7 +2,10 @@ package main
 
 // Admin endpoints for triaging orders that didn't make it to "shipped".
 //
+// /api/admin/orders                 GET  list all orders (paginated)
 // /api/admin/orders/pending-labels  GET  list paid orders without tracking
+// /api/admin/orders/{id}            GET  full order details (items + PII)
+// /api/admin/orders/{id}            DELETE remove an order and its items
 // /api/admin/orders/{id}/retry-label POST run runLabelJob synchronously
 //
 // All routes are gated by the existing adminAuth middleware (legacy
@@ -15,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -81,9 +85,153 @@ func handleAdminPendingLabels(orders *orderStore) http.HandlerFunc {
 	}
 }
 
+// adminOrderDetail is the JSON shape returned by list/detail. Includes
+// full recipient PII (CPF + address) + line items so the dashboard can
+// print picking slips and populate SuperFrete retries without a second
+// round-trip.
+type adminOrderDetail struct {
+	OrderID             string          `json:"orderId"`
+	Status              string          `json:"status"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
+	Name                string          `json:"name"`
+	Email               string          `json:"email"`
+	Document            string          `json:"document,omitempty"`
+	Address             string          `json:"address"`
+	AddressNumber       string          `json:"addressNumber,omitempty"`
+	AddressComplement   string          `json:"addressComplement,omitempty"`
+	District            string          `json:"district,omitempty"`
+	City                string          `json:"city,omitempty"`
+	State               string          `json:"state,omitempty"`
+	Zip                 string          `json:"zip"`
+	PaymentMethod       string          `json:"paymentMethod"`
+	TotalCents          int             `json:"totalCents"`
+	ShippingCents       int             `json:"shippingCents"`
+	AmountCents         int             `json:"amountCents"`
+	DiscountCents       int             `json:"discountCents,omitempty"`
+	CouponCode          string          `json:"couponCode,omitempty"`
+	ShippingServiceID   int             `json:"shippingServiceId,omitempty"`
+	ShippingServiceName string          `json:"shippingServiceName,omitempty"`
+	TrackingCode        string          `json:"trackingCode,omitempty"`
+	TrackingURL         string          `json:"trackingUrl,omitempty"`
+	LabelURL            string          `json:"labelUrl,omitempty"`
+	SuperfreteID        string          `json:"superfreteId,omitempty"`
+	TrackingAttempts    int             `json:"trackingAttempts,omitempty"`
+	TrackingLastError   string          `json:"trackingLastError,omitempty"`
+	Items               []adminOrderItem `json:"items"`
+}
+
+type adminOrderItem struct {
+	ProductID      string `json:"productId"`
+	ProductName    string `json:"productName"`
+	Size           string `json:"size,omitempty"`
+	Color          string `json:"color,omitempty"`
+	Quantity       int    `json:"quantity"`
+	UnitPriceCents int    `json:"unitPriceCents"`
+}
+
+func toAdminOrderDetail(o *pendingOrder) adminOrderDetail {
+	items := make([]adminOrderItem, 0, len(o.Items))
+	for _, it := range o.Items {
+		items = append(items, adminOrderItem{
+			ProductID:      it.ProductID,
+			ProductName:    it.ProductName,
+			Size:           it.Size,
+			Color:          it.Color,
+			Quantity:       it.Quantity,
+			UnitPriceCents: it.UnitPriceCents,
+		})
+	}
+	return adminOrderDetail{
+		OrderID:             o.ID,
+		Status:              o.Status,
+		CreatedAt:           o.CreatedAt,
+		UpdatedAt:           o.UpdatedAt,
+		Name:                o.Name,
+		Email:               o.Email,
+		Document:            o.Document,
+		Address:             o.Address,
+		AddressNumber:       o.AddressNumber,
+		AddressComplement:   o.AddressComplement,
+		District:            o.District,
+		City:                o.City,
+		State:               o.State,
+		Zip:                 o.Zip,
+		PaymentMethod:       o.PaymentMethod,
+		TotalCents:          o.TotalCents,
+		ShippingCents:       o.ShippingCents,
+		AmountCents:         o.AmountCents,
+		DiscountCents:       o.DiscountCents,
+		CouponCode:          o.CouponCode,
+		ShippingServiceID:   o.ShippingSvcID,
+		ShippingServiceName: o.ShippingSvcName,
+		TrackingCode:        o.TrackingCode,
+		TrackingURL:         o.TrackingURL,
+		LabelURL:            o.LabelURL,
+		SuperfreteID:        o.SuperfreteID,
+		TrackingAttempts:    o.TrackingAttempts,
+		TrackingLastError:   o.TrackingLastError,
+		Items:               items,
+	}
+}
+
+// handleAdminOrdersList powers the /api/admin/orders listing. Supports
+// pagination (?limit, ?offset) and optional status filter (?status=paid
+// or pending_payment / shipped / canceled). Returns the full recipient
+// detail so the UI can render an orders table with CPF + address
+// without a second round-trip per row.
+func handleAdminOrdersList(orders *orderStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+		limit := parseIntOrDefault(r.URL.Query().Get("limit"), 50)
+		offset := parseIntOrDefault(r.URL.Query().Get("offset"), 0)
+		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+		defer cancel()
+		rows, err := orders.listOrders(ctx, status, limit, offset)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list failed"})
+			return
+		}
+		out := make([]adminOrderDetail, 0, len(rows))
+		for _, o := range rows {
+			out = append(out, toAdminOrderDetail(o))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"count":  len(out),
+			"orders": out,
+		})
+	}
+}
+
+// parseIntOrDefault is a tiny helper to keep the admin handlers
+// readable — strconv.Atoi + fallback is noisy inline.
+func parseIntOrDefault(s string, def int) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
+	}
+	var n int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return def
+		}
+		n = n*10 + int(c-'0')
+		if n > 1<<20 {
+			return def
+		}
+	}
+	return n
+}
+
 // handleAdminOrderActions dispatches sub-routes under
-// /api/admin/orders/{id}/... . Today only the retry-label sub-route is
-// implemented; future moves (manual cancel, edit address) plug in here.
+// /api/admin/orders/{id}[/action]. The admin dashboard uses:
+//   - GET    /api/admin/orders/{id}            → full detail
+//   - DELETE /api/admin/orders/{id}            → remove (for cleanup)
+//   - POST   /api/admin/orders/{id}/retry-label → reissue label
 func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *viaCepClient, perOrder time.Duration) http.HandlerFunc {
 	if viacep == nil {
 		viacep = newViaCepClient()
@@ -98,22 +246,66 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *v
 			return
 		}
 		parts := strings.Split(path, "/")
+		if len(parts) == 0 || parts[0] == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid order id"})
+			return
+		}
+		orderID := parts[0]
+		if strings.ContainsAny(orderID, "?#") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid order id"})
+			return
+		}
+		if len(parts) == 1 {
+			switch r.Method {
+			case http.MethodGet:
+				adminOrderDetailHandler(w, r, orders, orderID)
+			case http.MethodDelete:
+				adminOrderDeleteHandler(w, r, orders, orderID)
+			default:
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			}
+			return
+		}
 		if len(parts) != 2 {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
-		orderID, action := parts[0], parts[1]
-		if orderID == "" || strings.ContainsAny(orderID, "?#") {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid order id"})
-			return
-		}
-		switch action {
+		switch parts[1] {
 		case "retry-label":
 			adminRetryLabel(w, r, orders, ship, viacep, orderID, perOrder)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown action"})
 		}
 	}
+}
+
+func adminOrderDetailHandler(w http.ResponseWriter, r *http.Request, orders *orderStore, orderID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, toAdminOrderDetail(o))
+}
+
+func adminOrderDeleteHandler(w http.ResponseWriter, r *http.Request, orders *orderStore, orderID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := orders.deleteOrder(ctx, orderID); err != nil {
+		if errors.Is(err, errOrderNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "delete failed"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // adminRetryLabelBody is the optional JSON payload the admin retry

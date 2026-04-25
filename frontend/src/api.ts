@@ -236,6 +236,91 @@ export const adminAuthApi = {
   stats: (token: string) => adminRequest<AdminStats>(`/api/admin/stats`, token),
 };
 
+// AdminOrder mirrors the Go adminOrderDetail struct returned by
+// GET /api/admin/orders and GET /api/admin/orders/:id.
+export type AdminOrder = {
+  orderId: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  name: string;
+  email: string;
+  document?: string;
+  address: string;
+  addressNumber?: string;
+  addressComplement?: string;
+  district?: string;
+  city?: string;
+  state?: string;
+  zip: string;
+  paymentMethod: string;
+  totalCents: number;
+  shippingCents: number;
+  amountCents: number;
+  discountCents?: number;
+  couponCode?: string;
+  shippingServiceId?: number;
+  shippingServiceName?: string;
+  trackingCode?: string;
+  trackingUrl?: string;
+  labelUrl?: string;
+  superfreteId?: string;
+  trackingAttempts?: number;
+  trackingLastError?: string;
+  items: {
+    productId: string;
+    productName: string;
+    size?: string;
+    color?: string;
+    quantity: number;
+    unitPriceCents: number;
+  }[];
+};
+
+export const adminOrdersApi = {
+  list: (token: string, opts?: { status?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.limit) q.set("limit", String(opts.limit));
+    if (opts?.offset) q.set("offset", String(opts.offset));
+    const suffix = q.toString();
+    return adminRequest<{ count: number; orders: AdminOrder[] }>(
+      `/api/admin/orders${suffix ? "?" + suffix : ""}`,
+      token,
+    );
+  },
+  detail: (token: string, orderId: string) =>
+    adminRequest<AdminOrder>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}`,
+      token,
+    ),
+  remove: (token: string, orderId: string) =>
+    adminRequest<void>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}`,
+      token,
+      { method: "DELETE" },
+    ),
+  retryLabel: (
+    token: string,
+    orderId: string,
+    overrides?: { name?: string; document?: string; district?: string; city?: string; state?: string },
+  ) =>
+    adminRequest<{
+      orderId: string;
+      status: string;
+      trackingCode?: string;
+      trackingUrl?: string;
+      labelUrl?: string;
+    }>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}/retry-label`,
+      token,
+      {
+        method: "POST",
+        body: overrides ? JSON.stringify(overrides) : undefined,
+      },
+    ),
+};
+
 export const adminCouponsApi = {
   list: (token: string) =>
     adminRequest<Coupon[]>(`/api/admin/coupons`, token),

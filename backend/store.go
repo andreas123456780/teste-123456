@@ -314,6 +314,97 @@ func (s *orderStore) listPendingLabels(ctx context.Context, cutoff time.Time, ma
 	return out, nil
 }
 
+// listOrders returns the most recent orders ordered by created_at
+// descending. The admin dashboard uses it to show a paginated list of
+// every order (not only the stuck ones). An optional status filter
+// lets the UI split "pendentes" vs "pagos" vs "enviados" without
+// loading everything and filtering client-side.
+func (s *orderStore) listOrders(ctx context.Context, status string, limit, offset int) ([]*pendingOrder, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	baseCols := `id, name, email, address, zip,
+		document, address_number, address_complement, district, city, state,
+		payment_method, status,
+		total_cents, shipping_cents, amount_cents,
+		shipping_service_id, shipping_service_name,
+		payment_intent_id, tracking_code, tracking_url, label_url, superfrete_order_id,
+		coupon_code, discount_cents,
+		tracking_attempts, tracking_last_error, tracking_attempted_at,
+		created_at, updated_at`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if status == "" {
+		rows, err = s.db.QueryContext(ctx, rb(`SELECT `+baseCols+`
+			FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?`),
+			limit, offset)
+	} else {
+		rows, err = s.db.QueryContext(ctx, rb(`SELECT `+baseCols+`
+			FROM orders WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`),
+			status, limit, offset)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	defer rows.Close()
+	var out []*pendingOrder
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan order: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orders: %w", err)
+	}
+	for _, o := range out {
+		if err := s.loadItems(ctx, o); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// deleteOrder removes an order + its line items + its payment_events
+// rows. Used by the admin "apagar pedido" button for cleaning up test
+// orders. Order rows with real payments should never be deleted —
+// the handler is responsible for that gating; the store just
+// enforces cascade cleanup to keep FK-like invariants when running
+// against SQLite (where FKs are enabled by PRAGMA but tests never
+// set them).
+func (s *orderStore) deleteOrder(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, rb(`DELETE FROM order_items WHERE order_id = ?`), id); err != nil {
+		return fmt.Errorf("delete items: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, rb(`DELETE FROM payment_events WHERE order_id = ?`), id); err != nil {
+		return fmt.Errorf("delete events: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, rb(`DELETE FROM orders WHERE id = ?`), id)
+	if err != nil {
+		return fmt.Errorf("delete order: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errOrderNotFound
+	}
+	return tx.Commit()
+}
+
+// errOrderNotFound is returned by deleteOrder when the order id
+// doesn't match any row. The handler translates it to a 404.
+var errOrderNotFound = errors.New("order not found")
+
 // recordEvent appends a row to payment_events. The payload is kept as
 // raw JSON text so we can replay/audit it later without re-fetching
 // from Stripe. Errors are returned but callers typically log-and-continue.
