@@ -1,5 +1,6 @@
 import { NastLogo } from "./NastLogo";
 import { Instagram, Linktree, WhatsApp } from "./icons";
+import { navHrefForHash } from "../utils/navHash";
 
 const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
 const LINKTREE_URL =
@@ -26,10 +27,10 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             Loja
           </div>
           <ul className="space-y-2">
-            <li><a href="#products" className="hover:text-white">Camisetas</a></li>
-            <li><a href="#products" className="hover:text-white">Boxy</a></li>
-            <li><a href="#products" className="hover:text-white">Baby Look</a></li>
-            <li><a href="#products" className="hover:text-white">Tabela de medidas</a></li>
+            <li><a href={navHrefForHash("#products")} className="hover:text-white">Camisetas</a></li>
+            <li><a href={navHrefForHash("#products")} className="hover:text-white">Boxy</a></li>
+            <li><a href={navHrefForHash("#products")} className="hover:text-white">Baby Look</a></li>
+            <li><a href={navHrefForHash("#products")} className="hover:text-white">Tabela de medidas</a></li>
           </ul>
         </div>
         <div>
