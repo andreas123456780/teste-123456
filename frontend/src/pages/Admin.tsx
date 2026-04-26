@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   adminApi,
   adminAuthApi,
@@ -83,6 +83,66 @@ function parseCsv(value: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+// CsvInput is a controlled input that keeps the user's raw typing
+// (commas, trailing spaces, etc.) intact while exposing a parsed
+// string array via onChange. The previous version used `value.join(", ")`
+// directly as the input value — that meant every keystroke parsed +
+// rejoined the string, so trailing commas got eaten and the user could
+// only ever add a single item. We hold the raw string locally and only
+// re-sync from props when an outside change happens (e.g. switching to
+// edit a different product). On blur we normalize the displayed text
+// to the canonical "a, b, c" form so it doesn't accumulate stray
+// whitespace across save/load cycles.
+function CsvInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  className?: string;
+}) {
+  const canonical = value.join(", ");
+  const [text, setText] = useState(canonical);
+  const lastCanonicalRef = useRef(canonical);
+  // Re-sync from props only when the canonical form changes externally
+  // (e.g. the parent reset to a different product). This keeps the user
+  // free to type anything in between without us clobbering it.
+  useEffect(() => {
+    if (canonical !== lastCanonicalRef.current) {
+      lastCanonicalRef.current = canonical;
+      setText(canonical);
+    }
+  }, [canonical]);
+  return (
+    <input
+      value={text}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
+        const parsed = parseCsv(raw);
+        const nextCanonical = parsed.join(", ");
+        // Only push upstream when the parsed list actually changes —
+        // typing a trailing comma or extra space shouldn't trigger a
+        // re-render with the same array shape.
+        if (nextCanonical !== lastCanonicalRef.current) {
+          lastCanonicalRef.current = nextCanonical;
+          onChange(parsed);
+        }
+      }}
+      onBlur={() => {
+        // On blur, normalize the displayed string so it matches the
+        // canonical "a, b, c" — clears stray spaces / trailing commas.
+        const parsed = parseCsv(text);
+        const nextCanonical = parsed.join(", ");
+        setText(nextCanonical);
+        lastCanonicalRef.current = nextCanonical;
+      }}
+      className={className}
+    />
+  );
 }
 
 // ImageUploadField renders a drag-and-drop / click-to-upload card with a
@@ -1175,18 +1235,17 @@ function ProductEditForm({
 
           <label className="flex flex-col">
             <span>Cores (csv)</span>
-            <input
-              value={value.colors.join(", ")}
-              onChange={(e) => set("colors", parseCsv(e.target.value))}
+            <CsvInput
+              value={value.colors}
+              onChange={(colors) => set("colors", colors)}
               className="rounded border border-neutral-300 px-2 py-1"
             />
           </label>
           <label className="flex flex-col">
             <span>Tamanhos (csv)</span>
-            <input
-              value={value.sizes.join(", ")}
-              onChange={(e) => {
-                const sizes = parseCsv(e.target.value);
+            <CsvInput
+              value={value.sizes}
+              onChange={(sizes) => {
                 // Keep stockBySize aligned with the size list: drop
                 // entries for sizes that were removed and seed 0 for
                 // newly added ones. Recompute the total in lockstep.
@@ -1243,9 +1302,9 @@ function ProductEditForm({
           )}
           <label className="flex flex-col">
             <span>Tags (csv)</span>
-            <input
-              value={value.tags.join(", ")}
-              onChange={(e) => set("tags", parseCsv(e.target.value))}
+            <CsvInput
+              value={value.tags}
+              onChange={(tags) => set("tags", tags)}
               className="rounded border border-neutral-300 px-2 py-1"
             />
           </label>
