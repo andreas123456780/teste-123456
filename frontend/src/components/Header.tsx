@@ -2,6 +2,7 @@ import { motion, useScroll, useTransform } from "framer-motion";
 import { NastLogo } from "./NastLogo";
 import { Instagram, Linktree, ShoppingBag } from "./icons";
 import { useAuth } from "../lib/useAuth";
+import { navHrefForHash } from "../utils/navHash";
 
 const INSTAGRAM_URL = "https://www.instagram.com/nast.comm/";
 const LINKTREE_URL =
@@ -40,7 +41,7 @@ export function Header({ cartCount, onOpenCart }: Props) {
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         <motion.a
-          href="#top"
+          href={navHrefForHash("#top")}
           aria-label="NAST — ir ao topo"
           className="flex items-center text-white"
           whileHover={{ opacity: 0.85 }}
@@ -58,7 +59,7 @@ export function Header({ cartCount, onOpenCart }: Props) {
           ].map(([label, href]) => (
             <motion.a
               key={label}
-              href={href}
+              href={navHrefForHash(href)}
               className="relative transition-colors hover:text-white"
               whileHover="hover"
             >
@@ -162,3 +163,4 @@ function firstName(name: string, email: string): string {
   const local = (email || "").split("@")[0];
   return local || "conta";
 }
+
