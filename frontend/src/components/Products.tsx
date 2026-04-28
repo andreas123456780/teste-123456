@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import type { Product } from "../types";
 import { ProductCard } from "./ProductCard";
+import { ProductCardSkeleton } from "./ProductCardSkeleton";
 import { SizeChartPanel, SizeChartLink } from "./SizeChart";
 import { WhatsApp } from "./icons";
 
@@ -9,6 +10,9 @@ type Props = {
   products: Product[];
   onOpen: (p: Product, preferredSize?: string) => void;
   whatsAppNumber: string;
+  /** When true the grid renders skeleton tiles instead of real cards.
+   * Used while the catalog is being fetched from the API the first time. */
+  loading?: boolean;
 };
 
 // Normalize category strings from the API (trim whitespace, title-case)
@@ -22,7 +26,7 @@ function normalizeCategory(raw: string): string {
     .join(" ");
 }
 
-export function Products({ products, onOpen, whatsAppNumber }: Props) {
+export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   const categories = useMemo(() => {
     const seen = new Set<string>();
     products.forEach((p) => seen.add(normalizeCategory(p.category)));
@@ -97,21 +101,29 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
 
       <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <AnimatePresence mode="popLayout">
-            {filtered.map((p, i) => (
-              <motion.div
-                key={p.id}
-                layout
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              >
-                <ProductCard product={p} index={i} onOpen={handleOpen} />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          {filtered.length === 0 && (
+          {loading && filtered.length === 0 ? (
+            <>
+              {Array.from({ length: 4 }).map((_, i) => (
+                <ProductCardSkeleton key={`sk-${i}`} />
+              ))}
+            </>
+          ) : (
+            <AnimatePresence mode="popLayout">
+              {filtered.map((p, i) => (
+                <motion.div
+                  key={p.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ type: "spring", stiffness: 140, damping: 20 }}
+                >
+                  <ProductCard product={p} index={i} onOpen={handleOpen} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          )}
+          {!loading && filtered.length === 0 && (
             <div className="col-span-full border border-white/10 bg-white/5 px-6 py-10 text-center text-sm text-white/60">
               Nenhum modelo encontrado pro filtro atual.
             </div>

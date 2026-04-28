@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Instagram as InstagramIcon } from "./icons";
+import { Reveal } from "./Reveal";
 
 // InstagramFeed fetches /api/social/instagram and renders a 2-row grid
 // of up to 6 recent posts. When the backend reports configured=false
@@ -56,6 +57,7 @@ export function InstagramFeed({ handle }: { handle: string }) {
   return (
     <section className="bg-white py-16 md:py-24" aria-labelledby="ig-heading">
       <div className="mx-auto max-w-6xl px-6">
+        <Reveal>
         <header className="mb-8 flex items-center justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-widest text-neutral-500">
@@ -75,26 +77,29 @@ export function InstagramFeed({ handle }: { handle: string }) {
             Seguir
           </a>
         </header>
+        </Reveal>
 
         <ul className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-4">
-          {posts.slice(0, 6).map((p) => {
+          {posts.slice(0, 6).map((p, i) => {
             const src = p.thumbnailUrl || p.mediaUrl;
             return (
               <li key={p.id} className="aspect-square overflow-hidden">
-                <a
-                  href={p.permalink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={p.caption || "Instagram post"}
-                  className="group block h-full w-full"
-                >
-                  <img
-                    src={src}
-                    alt={p.caption || "Instagram post"}
-                    loading="lazy"
-                    className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-                  />
-                </a>
+                <Reveal delay={i * 0.05} y={20} className="h-full w-full">
+                  <a
+                    href={p.permalink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={p.caption || "Instagram post"}
+                    className="group block h-full w-full"
+                  >
+                    <img
+                      src={src}
+                      alt={p.caption || "Instagram post"}
+                      loading="lazy"
+                      className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                    />
+                  </a>
+                </Reveal>
               </li>
             );
           })}
