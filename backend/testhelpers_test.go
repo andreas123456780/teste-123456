@@ -78,6 +78,19 @@ func validCheckoutDefaults() CheckoutRequest {
 	}
 }
 
+// testSenderAddr returns a complete sender address for use in tests
+// that exercise runLabelJob against the SuperFrete fake. The values
+// are placeholders — they are never shipped to the real API.
+func testSenderAddr() senderAddress {
+	return senderAddress{
+		Name:     "NAST Loja",
+		Address:  "Rua do Remetente",
+		District: "Centro",
+		City:     "São Paulo",
+		State:    "SP",
+	}
+}
+
 // putTestOrder is a small helper used in several tests to create a
 // minimal pending order.
 func putTestOrder(t *testing.T, store *orderStore, id, email, method string, amount, shipping int) *pendingOrder {

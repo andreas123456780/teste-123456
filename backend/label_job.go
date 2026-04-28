@@ -181,13 +181,20 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 	if details.State != "" {
 		to["state_abbr"] = details.State
 	}
+	from := buildFromCart(ship.cfg)
+	if from == nil {
+		return wrapAndRecord(ctx, orders, orderID, "from",
+			errors.New("sender address not configured — set SUPERFRETE_FROM_* env vars"))
+	}
 	cart := map[string]any{
+		"from":            from,
 		"to":              to,
 		"service":         o.ShippingSvcID,
 		"products":        buildCartProducts(o),
 		"volumes":         []any{vol},
 		"insurance_value": insurance,
 		"tag":             o.ID,
+		"platform":        superfretePlatform,
 	}
 
 	sfOrderID, err := ship.AddToCart(ctx, cart)
@@ -326,6 +333,37 @@ func buildPackagesFromOrder(o *pendingOrder) ([]ShippingPackage, error) {
 		refs = append(refs, ShippingCartRef{ProductID: it.ProductID, Quantity: it.Quantity})
 	}
 	return buildPackages(refs)
+}
+
+// buildFromCart assembles the `from` object SuperFrete expects in
+// /api/v0/cart. Returns nil when the configured seller address is
+// incomplete so the caller can surface a clear "not configured" error
+// instead of letting SuperFrete reject the request with a generic 400.
+func buildFromCart(cfg shippingConfig) map[string]any {
+	if !cfg.From.complete() || cfg.OriginZip == "" {
+		return nil
+	}
+	out := map[string]any{
+		"name":        cfg.From.Name,
+		"address":     cfg.From.Address,
+		"district":    cfg.From.District,
+		"city":        cfg.From.City,
+		"state_abbr":  cfg.From.State,
+		"postal_code": cfg.OriginZip,
+	}
+	if cfg.From.Company != "" {
+		out["company_document"] = cfg.From.Company
+	}
+	if cfg.From.Document != "" {
+		out["document"] = cfg.From.Document
+	}
+	if cfg.From.Phone != "" {
+		out["phone"] = cfg.From.Phone
+	}
+	if cfg.From.Email != "" {
+		out["email"] = cfg.From.Email
+	}
+	return out
 }
 
 // buildCartProducts produces the `products` array SuperFrete expects in
