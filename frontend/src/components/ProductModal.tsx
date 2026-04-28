@@ -196,7 +196,9 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                 const currentStock = sizeStock(product, size);
                 const disabled = currentStock <= 0;
                 return (
-                  <>
+                  <div
+                    className="sticky bottom-0 -mx-8 mt-8 flex flex-col gap-2 border-t border-white/10 bg-[var(--color-bg-soft)]/95 px-8 py-4 backdrop-blur md:static md:mx-0 md:mt-8 md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-0"
+                  >
                     <motion.button
                       type="button"
                       onClick={() => {
@@ -208,7 +210,7 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                       aria-disabled={disabled}
                       whileHover={disabled ? undefined : { y: -1 }}
                       whileTap={disabled ? undefined : { scale: 0.98 }}
-                      className={`mt-8 flex items-center justify-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-[0.3em] transition ${
+                      className={`flex items-center justify-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-[0.3em] transition ${
                         disabled
                           ? "cursor-not-allowed bg-white/10 text-white/40"
                           : "bg-[var(--color-accent)] text-black hover:bg-white"
@@ -228,7 +230,7 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                       aria-disabled={disabled}
                       whileHover={disabled ? undefined : { y: -1 }}
                       whileTap={disabled ? undefined : { scale: 0.98 }}
-                      className={`mt-2 flex items-center justify-center gap-2 border bg-transparent px-6 py-3.5 text-[11px] font-bold uppercase tracking-[0.3em] transition ${
+                      className={`flex items-center justify-center gap-2 border bg-transparent px-6 py-3.5 text-[11px] font-bold uppercase tracking-[0.3em] transition ${
                         disabled
                           ? "cursor-not-allowed border-white/10 text-white/30"
                           : "border-white/20 text-white hover:border-white"
@@ -237,7 +239,7 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                       <Plus className="h-4 w-4" />
                       Adicionar à sacola
                     </motion.button>
-                  </>
+                  </div>
                 );
               })()}
 

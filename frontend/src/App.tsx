@@ -9,6 +9,7 @@ import { HeroCarousel } from "./components/HeroCarousel";
 import { Products } from "./components/Products";
 import { Story } from "./components/Story";
 import { Newsletter } from "./components/Newsletter";
+import { BenefitsBar } from "./components/BenefitsBar";
 import { Footer } from "./components/Footer";
 import { Cart } from "./components/Cart";
 import { CookieBanner } from "./components/CookieBanner";
@@ -137,8 +138,12 @@ function App() {
 }
 
 function Home() {
-  const [products, setProducts] = useState<Product[]>(FALLBACK_PRODUCTS);
+  // Start with an empty catalog so the Products section renders skeleton
+  // tiles while the API call is in flight. If the API fails we fall back
+  // to the hard-coded catalog (offline safety net).
+  const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [productsLoading, setProductsLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
   // `?checkout=1` is the signal the auth page tacks onto its
@@ -169,23 +174,28 @@ function Home() {
     api
       .listProducts()
       .then((list) => {
-        if (cancelled || list.length === 0) return;
-        setProducts(list);
+        if (cancelled) return;
+        const catalog = list.length === 0 ? FALLBACK_PRODUCTS : list;
+        setProducts(catalog);
         // Drop cart lines whose product no longer exists in the
         // catalog — e.g. an admin-deleted product still cached in
         // localStorage. Otherwise the checkout throws "unknown
         // product" on submit with no recovery path for the customer.
-        const ids = new Set(list.map((p) => p.id));
+        const ids = new Set(catalog.map((p) => p.id));
         setCart((prev) => {
           const next = prev.filter((c) => ids.has(c.product.id));
           return next.length === prev.length ? prev : next;
         });
       })
       .catch(() => {
-        /* fallback already loaded */
+        if (cancelled) return;
+        // API unreachable — ship the offline catalog so the storefront
+        // still has something to show.
+        setProducts(FALLBACK_PRODUCTS);
       })
       .finally(() => {
         if (cancelled) return;
+        setProductsLoading(false);
         const elapsed = Date.now() - start;
         const delay = Math.max(0, 900 - elapsed);
         setTimeout(() => setLoading(false), delay);
@@ -268,12 +278,14 @@ function Home() {
           products={products}
           onOpen={openModal}
           whatsAppNumber={WHATSAPP_NUMBER}
+          loading={productsLoading}
         />
         <Story />
         <InstagramFeed handle={INSTAGRAM_HANDLE} />
         <Newsletter />
       </main>
 
+      <BenefitsBar />
       <Footer whatsAppNumber={WHATSAPP_NUMBER} />
 
       <ProductModal

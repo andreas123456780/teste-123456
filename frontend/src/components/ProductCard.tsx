@@ -36,7 +36,12 @@ export function ProductCard({ product, index, onOpen }: Props) {
           transition={{ type: "spring", stiffness: 200, damping: 22 }}
           className="absolute inset-0 flex items-center justify-center"
         >
-          <ProductArt image={product.image} alt={product.name} size={320} />
+          <ProductArt
+            image={product.image}
+            hoverImage={product.backImage}
+            alt={product.name}
+            size={320}
+          />
         </motion.div>
 
         <div className="absolute left-3 top-3 flex gap-2">
