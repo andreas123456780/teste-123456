@@ -624,6 +624,7 @@ function Kpi({ label, value }: { label: string; value: string }) {
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     paid: "bg-green-100 text-green-800",
+    awaiting_shipment: "bg-amber-100 text-amber-800",
     shipped: "bg-blue-100 text-blue-800",
     pending_payment: "bg-yellow-100 text-yellow-800",
     failed: "bg-red-100 text-red-800",
@@ -733,14 +734,54 @@ function OrdersAdmin({ token }: { token: string }) {
     setBusyId(id);
     try {
       const res = await adminOrdersApi.retryLabel(token, id);
-      alert(
-        `Retry ok: status=${res.status}${
-          res.trackingCode ? ` · tracking=${res.trackingCode}` : ""
-        }`,
-      );
+      const suffix =
+        res.status === "awaiting_shipment"
+          ? " — pague a etiqueta no app do SuperFrete"
+          : res.trackingCode
+          ? ` · tracking=${res.trackingCode}`
+          : "";
+      alert(`Status: ${res.status}${suffix}`);
       await load();
     } catch (e) {
-      alert("Retry falhou: " + (e instanceof Error ? e.message : String(e)));
+      alert("Falhou: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleRefreshTracking(id: string) {
+    setBusyId(id);
+    try {
+      const res = await adminOrdersApi.refreshTracking(token, id);
+      if (res.updated) {
+        alert(`Rastreio encontrado: ${res.trackingCode}\nCliente notificado por email.`);
+      } else {
+        alert(
+          res.hint ||
+            "SuperFrete ainda não emitiu rastreio — confira se a etiqueta já foi paga no app.",
+        );
+      }
+      await load();
+    } catch (e) {
+      alert("Falha ao atualizar rastreio: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleMarkShipped(id: string, trackingCode: string) {
+    const code = trackingCode.trim();
+    if (!code) {
+      alert("Digite o código de rastreio dos Correios antes.");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await adminOrdersApi.markShipped(token, id, { trackingCode: code });
+      alert("Pedido marcado como enviado. Cliente notificado por email.");
+      await load();
+    } catch (e) {
+      alert("Falha: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusyId(null);
     }
@@ -762,6 +803,7 @@ function OrdersAdmin({ token }: { token: string }) {
             <option value="">(todos)</option>
             <option value="pending_payment">pending_payment</option>
             <option value="paid">paid</option>
+            <option value="awaiting_shipment">awaiting_shipment</option>
             <option value="shipped">shipped</option>
             <option value="failed">failed</option>
             <option value="canceled">canceled</option>
@@ -836,6 +878,8 @@ function OrdersAdmin({ token }: { token: string }) {
               busy={busyId === selected.orderId}
               onRetry={() => void handleRetry(selected.orderId)}
               onDelete={() => void handleDelete(selected.orderId)}
+              onRefreshTracking={() => void handleRefreshTracking(selected.orderId)}
+              onMarkShipped={(code) => void handleMarkShipped(selected.orderId, code)}
             />}
           </aside>
         </div>
@@ -849,13 +893,19 @@ function OrderDetail({
   busy,
   onRetry,
   onDelete,
+  onRefreshTracking,
+  onMarkShipped,
 }: {
   order: AdminOrder;
   busy: boolean;
   onRetry: () => void;
   onDelete: () => void;
+  onRefreshTracking: () => void;
+  onMarkShipped: (trackingCode: string) => void;
 }) {
   const canRetryLabel = order.status === "paid" && !order.trackingCode;
+  const isAwaitingShipment = order.status === "awaiting_shipment";
+  const [manualTracking, setManualTracking] = useState("");
   return (
     <div className="space-y-4">
       <header className="flex items-start justify-between gap-3">
@@ -969,6 +1019,67 @@ function OrderDetail({
           ))}
         </ul>
       </div>
+
+      {isAwaitingShipment && (
+        <div className="space-y-3 rounded border border-amber-300 bg-amber-50 p-3">
+          <div>
+            <h4 className="text-sm font-semibold text-amber-900">
+              Etiqueta no carrinho do SuperFrete
+            </h4>
+            <p className="mt-1 text-xs text-amber-800">
+              O pedido já está na sua conta do SuperFrete como{" "}
+              <strong>aguardando pagamento</strong>.{" "}
+              <a
+                href="https://web.superfrete.com/#/cart"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                abrir carrinho
+              </a>
+              {" · "}
+              pague pelo app (Pix costuma ser mais barato), imprima e posta.
+              Depois volte aqui para:
+            </p>
+            {order.superfreteId && (
+              <p className="mt-1 font-mono text-xs text-amber-700">
+                ID SuperFrete: {order.superfreteId}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRefreshTracking}
+              className="rounded border border-amber-700 bg-white px-3 py-1.5 text-sm text-amber-900 disabled:opacity-50"
+            >
+              {busy ? "Consultando…" : "Atualizar rastreio do SuperFrete"}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={manualTracking}
+              onChange={(e) => setManualTracking(e.target.value)}
+              placeholder="Código de rastreio (ex: BR123456789BR)"
+              className="flex-1 min-w-[16rem] rounded border border-amber-300 bg-white px-2 py-1 text-sm font-mono"
+            />
+            <button
+              type="button"
+              disabled={busy || !manualTracking.trim()}
+              onClick={() => onMarkShipped(manualTracking)}
+              className="rounded bg-amber-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            >
+              {busy ? "Salvando…" : "Marcar como enviado"}
+            </button>
+          </div>
+          <p className="text-xs text-amber-800">
+            Marcar como enviado dispara o email “Seu pedido está a caminho” para
+            o cliente com o rastreio.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {canRetryLabel && (

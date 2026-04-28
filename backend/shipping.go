@@ -56,6 +56,13 @@ type shippingConfig struct {
 	OriginZip   string // e.g. "08503000"
 	AdminToken  string // for /label and /track endpoints
 	From        senderAddress
+	// Autopay controls whether the label pipeline debits the SuperFrete
+	// wallet immediately after adding the order to the cart. When false
+	// (default), runLabelJob stops at AddToCart and leaves the order in
+	// "awaiting_shipment" so the operator can pay manually via the
+	// SuperFrete app (cheaper Pix, coupons, etc.). When true, the old
+	// behaviour is preserved: checkout → generate → print synchronously.
+	Autopay bool
 }
 
 // senderAddress holds the seller's address. SuperFrete's /api/v0/cart
@@ -107,7 +114,19 @@ func loadShippingConfig() shippingConfig {
 			Email:    strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_EMAIL")),
 			Company:  strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_COMPANY")),
 		},
+		Autopay: isTruthy(os.Getenv("SUPERFRETE_AUTOPAY")),
 	}
+}
+
+// isTruthy accepts any of the common bool-ish env var spellings.
+// Returns false for unset/empty strings so the default stays "cart
+// only" (no wallet debit).
+func isTruthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	}
+	return false
 }
 
 // ----- Domain types -----

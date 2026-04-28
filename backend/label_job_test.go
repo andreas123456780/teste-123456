@@ -138,6 +138,7 @@ func TestRunLabelJob_HappyPath(t *testing.T) {
 		UserAgent:   "NAST",
 		OriginZip:   "08503000",
 		From:        testSenderAddr(),
+		Autopay:     true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -164,6 +165,61 @@ func TestRunLabelJob_HappyPath(t *testing.T) {
 	}
 	if o.TrackingLastError != "" {
 		t.Fatalf("expected no last error after success, got %q", o.TrackingLastError)
+	}
+}
+
+func TestRunLabelJob_CartOnly_StopsAfterAddToCart(t *testing.T) {
+	// Default deployment (Autopay false): runLabelJob must add the
+	// order to the SuperFrete cart and then stop. No /checkout, no
+	// /generate, no /print, no tracking code. Order flips to
+	// "awaiting_shipment" so the admin UI can surface the manual
+	// tracking input + refresh button.
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_cart_only")
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{
+		BaseURL:     srv.URL,
+		AccessToken: "tok",
+		OriginZip:   "08503000",
+		From:        testSenderAddr(),
+		// Autopay left as the zero value (false) on purpose.
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_cart_only", labelOverrides{}); err != nil {
+		t.Fatalf("runLabelJob: %v", err)
+	}
+
+	if atomic.LoadInt32(&fs.cartCalls) != 1 {
+		t.Fatalf("cart calls = %d, want 1", fs.cartCalls)
+	}
+	if n := atomic.LoadInt32(&fs.checkoutCalls); n != 0 {
+		t.Fatalf("checkout calls = %d, want 0 (cart-only mode)", n)
+	}
+	if n := atomic.LoadInt32(&fs.generateCalls); n != 0 {
+		t.Fatalf("generate calls = %d, want 0 (cart-only mode)", n)
+	}
+	if n := atomic.LoadInt32(&fs.printCalls); n != 0 {
+		t.Fatalf("print calls = %d, want 0 (cart-only mode)", n)
+	}
+
+	o, _, _ := store.get(ctx, "ord_cart_only")
+	if o.Status != "awaiting_shipment" {
+		t.Fatalf("status = %q, want awaiting_shipment", o.Status)
+	}
+	if o.SuperfreteID != fs.cartID {
+		t.Fatalf("superfrete_order_id = %q, want %q", o.SuperfreteID, fs.cartID)
+	}
+	if o.TrackingCode != "" {
+		t.Fatalf("tracking_code = %q, want empty (label not paid yet)", o.TrackingCode)
+	}
+	if o.TrackingLastError != "" {
+		t.Fatalf("tracking_last_error should be cleared, got %q", o.TrackingLastError)
 	}
 }
 
@@ -199,7 +255,7 @@ func TestRunLabelJob_CheckoutFailureRecordsAttempt(t *testing.T) {
 	fs.failCheckout = true
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 
 	ctx := context.Background()
 	err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_fail", labelOverrides{})
@@ -272,8 +328,7 @@ func TestSyncLabelDispatcher_RunsSynchronously(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
-
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 	d := newSyncLabelDispatcher(store, ship, 5*time.Second)
 	d.viacep = defaultFakeViaCep(t)
 	d.Enqueue("ord_sync") // returns only after the SuperFrete pipeline finishes

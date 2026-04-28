@@ -2,11 +2,13 @@ package main
 
 // Admin endpoints for triaging orders that didn't make it to "shipped".
 //
-// /api/admin/orders                 GET  list all orders (paginated)
-// /api/admin/orders/pending-labels  GET  list paid orders without tracking
-// /api/admin/orders/{id}            GET  full order details (items + PII)
-// /api/admin/orders/{id}            DELETE remove an order and its items
-// /api/admin/orders/{id}/retry-label POST run runLabelJob synchronously
+// /api/admin/orders                     GET  list all orders (paginated)
+// /api/admin/orders/pending-labels      GET  list paid orders without tracking
+// /api/admin/orders/{id}                GET  full order details (items + PII)
+// /api/admin/orders/{id}                DELETE remove an order and its items
+// /api/admin/orders/{id}/retry-label    POST run runLabelJob synchronously
+// /api/admin/orders/{id}/refresh-tracking POST poll SuperFrete for tracking code
+// /api/admin/orders/{id}/mark-shipped   POST save manual tracking + email buyer
 //
 // All routes are gated by the existing adminAuth middleware (legacy
 // X-Admin-Token or session cookie). The pending-labels list deliberately
@@ -273,6 +275,10 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *v
 		switch parts[1] {
 		case "retry-label":
 			adminRetryLabel(w, r, orders, ship, viacep, orderID, perOrder)
+		case "refresh-tracking":
+			adminRefreshTracking(w, r, orders, ship, orderID)
+		case "mark-shipped":
+			adminMarkShipped(w, r, orders, orderID)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown action"})
 		}
@@ -387,5 +393,163 @@ func adminRetryLabel(w http.ResponseWriter, r *http.Request, orders *orderStore,
 		"trackingUrl":  o.TrackingURL,
 		"labelUrl":     o.LabelURL,
 		"superfreteId": o.SuperfreteID,
+	})
+}
+
+// adminRefreshTracking polls SuperFrete's /order/info endpoint for a
+// tracking code. Used when the operator has just paid the label via
+// the SuperFrete app and wants to finalize the order without retyping
+// the tracking code. If the carrier has already issued the code we
+// persist it, flip the order to "shipped", and fire the tracking
+// email. Otherwise we return the current SuperFrete status so the UI
+// can tell the operator "still waiting".
+func adminRefreshTracking(w http.ResponseWriter, r *http.Request, orders *orderStore, ship *shippingClient, orderID string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if ship == nil || ship.cfg.AccessToken == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shipping unavailable"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil || !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	if o.SuperfreteID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "order has no SuperFrete id — generate the label first",
+		})
+		return
+	}
+	if o.TrackingCode != "" {
+		// Already finalized — return the current state so the UI can
+		// reflect whatever is on disk.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"orderId":      o.ID,
+			"status":       o.Status,
+			"trackingCode": o.TrackingCode,
+			"trackingUrl":  o.TrackingURL,
+			"updated":      false,
+		})
+		return
+	}
+
+	info, err := ship.OrderInfo(ctx, o.SuperfreteID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":  "superfrete order/info failed",
+			"detail": err.Error(),
+		})
+		return
+	}
+	code, url := parseTrackingFromInfo(info)
+	if code == "" {
+		// SuperFrete hasn't issued a tracking code yet — usually
+		// means the label wasn't paid. Surface the raw response so
+		// the frontend can show it in a debug collapse.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"orderId":  o.ID,
+			"status":   o.Status,
+			"updated":  false,
+			"rawInfo":  json.RawMessage(info),
+			"hint":     "label ainda não foi paga no SuperFrete",
+		})
+		return
+	}
+	if err := orders.setTracking(ctx, orderID, code, url, o.LabelURL, o.SuperfreteID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist tracking failed"})
+		return
+	}
+	if err := orders.setStatus(ctx, orderID, "shipped"); err != nil {
+		// Non-fatal — tracking is already saved.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"orderId":      o.ID,
+			"status":       o.Status,
+			"trackingCode": code,
+			"trackingUrl":  url,
+			"updated":      true,
+			"warning":      "tracking saved but status flip failed",
+		})
+		return
+	}
+	if h := labelSuccessHook; h != nil {
+		h(orderID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"orderId":      o.ID,
+		"status":       "shipped",
+		"trackingCode": code,
+		"trackingUrl":  url,
+		"updated":      true,
+	})
+}
+
+// adminMarkShippedBody is the payload for manual tracking entry. Used
+// when the operator prefers to type the Correios code directly (e.g.
+// the label was paid outside SuperFrete or /order/info hasn't
+// propagated yet).
+type adminMarkShippedBody struct {
+	TrackingCode string `json:"trackingCode"`
+	TrackingURL  string `json:"trackingUrl"`
+}
+
+func adminMarkShipped(w http.ResponseWriter, r *http.Request, orders *orderStore, orderID string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	raw, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
+	_ = r.Body.Close()
+	var body adminMarkShippedBody
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+	}
+	code := strings.TrimSpace(body.TrackingCode)
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "trackingCode required"})
+		return
+	}
+	url := strings.TrimSpace(body.TrackingURL)
+	if url == "" {
+		url = "https://rastreamento.correios.com.br/app/index.php?objeto=" + code
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil || !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	if err := orders.setTracking(ctx, orderID, code, url, o.LabelURL, o.SuperfreteID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist tracking failed"})
+		return
+	}
+	if err := orders.setStatus(ctx, orderID, "shipped"); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"orderId":      o.ID,
+			"status":       o.Status,
+			"trackingCode": code,
+			"trackingUrl":  url,
+			"warning":      "tracking saved but status flip failed",
+		})
+		return
+	}
+	if h := labelSuccessHook; h != nil {
+		h(orderID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"orderId":      orderID,
+		"status":       "shipped",
+		"trackingCode": code,
+		"trackingUrl":  url,
 	})
 }

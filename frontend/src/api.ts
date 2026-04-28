@@ -401,6 +401,37 @@ export const adminOrdersApi = {
         body: overrides ? JSON.stringify(overrides) : undefined,
       },
     ),
+  refreshTracking: (token: string, orderId: string) =>
+    adminRequest<{
+      orderId: string;
+      status: string;
+      updated: boolean;
+      trackingCode?: string;
+      trackingUrl?: string;
+      hint?: string;
+    }>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}/refresh-tracking`,
+      token,
+      { method: "POST" },
+    ),
+  markShipped: (
+    token: string,
+    orderId: string,
+    payload: { trackingCode: string; trackingUrl?: string },
+  ) =>
+    adminRequest<{
+      orderId: string;
+      status: string;
+      trackingCode: string;
+      trackingUrl: string;
+    }>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}/mark-shipped`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
 };
 
 export const adminCouponsApi = {
