@@ -94,7 +94,7 @@ func TestAdminRetryLabel_Success(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 
 	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
@@ -170,7 +170,7 @@ func TestAdminRetryLabel_Failure(t *testing.T) {
 	fs.failCheckout = true
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 
 	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
@@ -193,6 +193,145 @@ func TestAdminRetryLabel_UnknownAction(t *testing.T) {
 	h(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rr.Code)
+	}
+}
+
+func TestAdminRefreshTracking_PullsNewCode(t *testing.T) {
+	// Simulates the operator having just paid the label in the
+	// SuperFrete app: runLabelJob had already added the order to the
+	// cart, so the row carries a SuperfreteID + "awaiting_shipment"
+	// status. Hitting /refresh-tracking must call /order/info, pick
+	// up the tracking code, flip the order to "shipped", fire the
+	// labelSuccessHook, and surface the code in the JSON response.
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_refresh")
+	if err := store.markAwaitingShipment(context.Background(), "ord_refresh", "sf_cart_123"); err != nil {
+		t.Fatalf("markAwaitingShipment: %v", err)
+	}
+
+	fs := newFakeSuperFrete(t)
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
+
+	// Capture the hook fire so we can assert the "on the way" email is
+	// dispatched after the manual refresh too.
+	var hookCalledFor string
+	prev := labelSuccessHook
+	labelSuccessHook = func(orderID string) { hookCalledFor = orderID }
+	defer func() { labelSuccessHook = prev }()
+
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_refresh/refresh-tracking", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Status       string `json:"status"`
+		TrackingCode string `json:"trackingCode"`
+		Updated      bool   `json:"updated"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if got.Status != "shipped" || got.TrackingCode == "" || !got.Updated {
+		t.Fatalf("unexpected response: %+v", got)
+	}
+	if hookCalledFor != "ord_refresh" {
+		t.Fatalf("labelSuccessHook not fired (got %q)", hookCalledFor)
+	}
+	o, _, _ := store.get(context.Background(), "ord_refresh")
+	if o.Status != "shipped" || o.TrackingCode == "" {
+		t.Fatalf("persisted state wrong: status=%q tracking=%q", o.Status, o.TrackingCode)
+	}
+}
+
+func TestAdminRefreshTracking_NoCodeYet(t *testing.T) {
+	// If SuperFrete's /order/info doesn't return a tracking code
+	// (usually because the label wasn't paid yet), the endpoint must
+	// respond 200 with updated=false + a hint — NOT flip the order.
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_wait")
+	_ = store.markAwaitingShipment(context.Background(), "ord_wait", "sf_cart_123")
+
+	fs := newFakeSuperFrete(t)
+	fs.infoBody = `{"status":"waiting_payment"}` // no tracking yet
+	srv := fs.start()
+	defer srv.Close()
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
+
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_wait/refresh-tracking", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Updated bool   `json:"updated"`
+		Status  string `json:"status"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if got.Updated {
+		t.Fatal("updated should be false when no tracking yet")
+	}
+	if got.Status != "awaiting_shipment" {
+		t.Fatalf("status = %q, want awaiting_shipment", got.Status)
+	}
+}
+
+func TestAdminMarkShipped_SavesAndEmails(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_manual")
+	_ = store.markAwaitingShipment(context.Background(), "ord_manual", "sf_manual")
+
+	var hookCalledFor string
+	prev := labelSuccessHook
+	labelSuccessHook = func(orderID string) { hookCalledFor = orderID }
+	defer func() { labelSuccessHook = prev }()
+
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"trackingCode":"BR9999BR"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_manual/mark-shipped", body)
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	o, _, _ := store.get(context.Background(), "ord_manual")
+	if o.Status != "shipped" || o.TrackingCode != "BR9999BR" {
+		t.Fatalf("order not shipped: status=%q tracking=%q", o.Status, o.TrackingCode)
+	}
+	if o.TrackingURL == "" {
+		t.Fatal("expected default Correios tracking URL")
+	}
+	if hookCalledFor != "ord_manual" {
+		t.Fatalf("labelSuccessHook not fired (got %q)", hookCalledFor)
+	}
+}
+
+func TestAdminMarkShipped_RequiresCode(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putPaidOrderForLabel(t, store, "ord_empty_code")
+	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_empty_code/mark-shipped",
+		strings.NewReader(`{"trackingCode":"   "}`))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 when trackingCode blank, got %d", rr.Code)
 	}
 }
 

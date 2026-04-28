@@ -201,6 +201,20 @@ func runLabelJob(ctx context.Context, orders *orderStore, ship *shippingClient, 
 	if err != nil {
 		return wrapAndRecord(ctx, orders, orderID, "addtocart", err)
 	}
+
+	// Default deployment: stop here. The order sits in SuperFrete's
+	// cart as "awaiting payment"; the operator pays via the SuperFrete
+	// app (Pix is cheaper than wallet debit) and then comes back to
+	// the admin UI to pull the tracking code via refresh-tracking or
+	// to type it in manually. Only legacy/auto setups continue below.
+	if !ship.cfg.Autopay {
+		if err := orders.markAwaitingShipment(ctx, orderID, sfOrderID); err != nil {
+			return wrapAndRecord(ctx, orders, orderID, "awaiting shipment", err)
+		}
+		log.Printf("label_job: order %s queued in SuperFrete cart (sf=%s), awaiting manual payment", orderID, sfOrderID)
+		return nil
+	}
+
 	if _, err := ship.Checkout(ctx, []string{sfOrderID}); err != nil {
 		return wrapAndRecord(ctx, orders, orderID, "checkout", err)
 	}

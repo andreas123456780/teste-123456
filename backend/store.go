@@ -244,6 +244,29 @@ func (s *orderStore) setTracking(ctx context.Context, orderID, code, url, labelU
 	return nil
 }
 
+// markAwaitingShipment is the cart-only mode counterpart of
+// setTracking. It persists the SuperFrete cart id (so the admin can
+// cross-reference the order in the SuperFrete dashboard), flips the
+// order status to "awaiting_shipment", and clears any prior failure
+// bookkeeping. No tracking_code is set — that arrives only after the
+// operator pays the label via the SuperFrete app.
+func (s *orderStore) markAwaitingShipment(ctx context.Context, orderID, superfreteID string) error {
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, rb(`UPDATE orders SET
+		status = 'awaiting_shipment',
+		superfrete_order_id = ?,
+		tracking_last_error = NULL,
+		tracking_attempted_at = ?,
+		updated_at = ?
+		WHERE id = ?`),
+		nullableStr(superfreteID), now, now, orderID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark awaiting shipment: %w", err)
+	}
+	return nil
+}
+
 // recordTrackingFailure increments the per-order attempt counter and
 // stores the latest error so the admin UI can show why an order is
 // stuck. The cron-driven retry path uses tracking_attempts +
