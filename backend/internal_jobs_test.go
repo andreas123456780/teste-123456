@@ -81,7 +81,7 @@ func TestProcessLabelsJob_HappyPath(t *testing.T) {
 	srv := fs.start()
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{
-		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000",
+		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(),
 	})
 	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 
@@ -127,7 +127,7 @@ func TestProcessLabelsJob_SkipsRecentFailures(t *testing.T) {
 	srv := fs.start()
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{
-		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000",
+		BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(),
 	})
 	h := handleProcessLabelsJob(internalJobsConfig{token: "secret"}, store, ship, defaultFakeViaCep(t))
 

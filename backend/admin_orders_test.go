@@ -94,7 +94,7 @@ func TestAdminRetryLabel_Success(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
@@ -127,7 +127,7 @@ func TestAdminRetryLabel_WithNameOverride(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()
@@ -170,7 +170,7 @@ func TestAdminRetryLabel_Failure(t *testing.T) {
 	fs.failCheckout = true
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
 	rr := httptest.NewRecorder()

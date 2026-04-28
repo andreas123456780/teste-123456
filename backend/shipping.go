@@ -55,6 +55,27 @@ type shippingConfig struct {
 	UserAgent   string // SuperFrete requires `App (contact@email)` format
 	OriginZip   string // e.g. "08503000"
 	AdminToken  string // for /label and /track endpoints
+	From        senderAddress
+}
+
+// senderAddress holds the seller's address. SuperFrete's /api/v0/cart
+// endpoint requires a populated `from` object so the label can be printed
+// with the correct return address.
+type senderAddress struct {
+	Name     string
+	Address  string
+	District string
+	City     string
+	State    string // 2-letter UF, e.g. "SP"
+	Document string
+	Phone    string
+	Email    string
+	Company  string
+}
+
+func (s senderAddress) complete() bool {
+	return s.Name != "" && s.Address != "" && s.District != "" &&
+		s.City != "" && s.State != ""
 }
 
 func loadShippingConfig() shippingConfig {
@@ -75,6 +96,17 @@ func loadShippingConfig() shippingConfig {
 		UserAgent:   ua,
 		OriginZip:   origin,
 		AdminToken:  strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
+		From: senderAddress{
+			Name:     strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_NAME")),
+			Address:  strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_ADDRESS")),
+			District: strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_DISTRICT")),
+			City:     strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_CITY")),
+			State:    strings.ToUpper(strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_STATE"))),
+			Document: digitsOnly(os.Getenv("SUPERFRETE_FROM_DOCUMENT")),
+			Phone:    strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_PHONE")),
+			Email:    strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_EMAIL")),
+			Company:  strings.TrimSpace(os.Getenv("SUPERFRETE_FROM_COMPANY")),
+		},
 	}
 }
 

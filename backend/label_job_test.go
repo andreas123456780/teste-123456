@@ -137,6 +137,7 @@ func TestRunLabelJob_HappyPath(t *testing.T) {
 		AccessToken: "tok",
 		UserAgent:   "NAST",
 		OriginZip:   "08503000",
+		From:        testSenderAddr(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -179,7 +180,7 @@ func TestRunLabelJob_IdempotentSkip(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	if err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_done", labelOverrides{}); err != nil {
 		t.Fatalf("runLabelJob on already-tracked order: %v", err)
@@ -198,7 +199,7 @@ func TestRunLabelJob_CheckoutFailureRecordsAttempt(t *testing.T) {
 	fs.failCheckout = true
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	ctx := context.Background()
 	err := runLabelJob(ctx, store, ship, defaultFakeViaCep(t), "ord_fail", labelOverrides{})
@@ -230,7 +231,7 @@ func TestRunLabelJob_CheckoutFailureRecordsAttempt(t *testing.T) {
 func TestRunLabelJob_OrderNotFound(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
-	ship := newShippingClient(shippingConfig{BaseURL: "http://unused", AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: "http://unused", AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 	err := runLabelJob(context.Background(), store, ship, defaultFakeViaCep(t), "ord_missing", labelOverrides{})
 	if err == nil {
 		t.Fatal("expected error for unknown order")
@@ -254,7 +255,7 @@ func TestRunLabelJob_SkipsUnpaidOrder(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 	if err := runLabelJob(context.Background(), store, ship, defaultFakeViaCep(t), "ord_pending", labelOverrides{}); err != nil {
 		t.Fatalf("runLabelJob: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestSyncLabelDispatcher_RunsSynchronously(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	d := newSyncLabelDispatcher(store, ship, 5*time.Second)
 	d.viacep = defaultFakeViaCep(t)
@@ -405,7 +406,7 @@ func TestRunLabelJob_SendsDistrictCityStateToSuperFrete(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	viacep := newFakeViaCep(t, addressDetails{District: "Jardim América", City: "Suzano", State: "SP"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -443,7 +444,7 @@ func TestRunLabelJob_DocumentOverrideReachesSuperFrete(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -470,7 +471,7 @@ func TestRunLabelJob_NameOverrideReachesSuperFrete(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -532,7 +533,7 @@ func TestRunLabelJob_StoredRecipientFieldsReachSuperFrete(t *testing.T) {
 	fs := newFakeSuperFrete(t)
 	srv := fs.start()
 	defer srv.Close()
-	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000"})
+	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
 	// A ViaCEP client that MUST NOT be called — its URL points to an
 	// unreachable port. The test fails if runLabelJob asks it for
