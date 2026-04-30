@@ -127,7 +127,7 @@ func (w *emailWorker) processTracking(ctx context.Context, orderID string) error
 		strings.TrimRight(w.cfg.AppURL, "/"),
 		makeOrderToken(w.cfg.TokenKey, o.ID, time.Now()),
 	)
-	subject := fmt.Sprintf("Seu código de rastreio referente ao pedido %s está disponível · NAST", o.ID)
+	subject := fmt.Sprintf("Seu código de rastreio do pedido %s está disponível · NAST", o.ID)
 	html := renderTrackingHTML(o, orderLink)
 	text := renderTrackingText(o, orderLink)
 
