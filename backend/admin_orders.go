@@ -15,6 +15,12 @@ package main
 //                                            downstream pipeline as the webhook:
 //                                            stock decrement + label enqueue +
 //                                            confirmation email.
+// /api/admin/orders/{id}/items          POST add a line item to an existing
+//                                            order. Body picks gift|extra mode:
+//                                            gift keeps totals frozen, extra
+//                                            bumps the cart total by qty*price.
+//                                            Stock for the chosen size is
+//                                            decremented in both modes.
 //
 // All routes are gated by the existing adminAuth middleware (legacy
 // X-Admin-Token or session cookie). The pending-labels list deliberately
@@ -28,6 +34,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -298,6 +305,8 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *v
 			adminMarkShipped(w, r, orders, orderID)
 		case "mark-paid":
 			adminMarkPaid(w, r, orders, deps, orderID)
+		case "items":
+			adminAddOrderItem(w, r, orders, deps, orderID)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown action"})
 		}
@@ -638,6 +647,143 @@ func adminMarkPaid(w http.ResponseWriter, r *http.Request, orders *orderStore, d
 	if updated == nil {
 		updated = o
 		updated.Status = "paid"
+	}
+	writeJSON(w, http.StatusOK, toAdminOrderDetail(updated))
+}
+
+// adminAddItemBody is the JSON contract for POST /admin/orders/{id}/items.
+// Mode is required: "gift" leaves totals untouched, "extra" bumps the
+// cart by quantity*unitPriceCents (recomputed server-side from the
+// product, so the operator can't mistype the price). Quantity defaults
+// to 1.
+type adminAddItemBody struct {
+	ProductID string `json:"productId"`
+	Size      string `json:"size"`
+	Quantity  int    `json:"quantity"`
+	Mode      string `json:"mode"` // "gift" | "extra"
+}
+
+// adminAddOrderItem appends a shirt to an existing order. Operators
+// reach for this when the buyer agrees to add a piece during the
+// WhatsApp/Pix conversation — either as a paid upsell ("extra") or a
+// throw-in to close the deal ("gift").
+//
+// Disallowed for terminal statuses (shipped, canceled, failed) — the
+// SuperFrete label is already cut by then and editing the items would
+// create a mismatch between what we've shipped and what the order
+// shows. Also requires deps.Products so we can resolve the unit price
+// from the catalog and decrement the size-specific stock atomically.
+func adminAddOrderItem(w http.ResponseWriter, r *http.Request, orders *orderStore, deps adminOrderActionDeps, orderID string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if deps.Products == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "products store unavailable"})
+		return
+	}
+	raw, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
+	_ = r.Body.Close()
+	var body adminAddItemBody
+	if len(bytes.TrimSpace(raw)) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body required"})
+		return
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+		return
+	}
+	productID := strings.TrimSpace(body.ProductID)
+	size := strings.TrimSpace(body.Size)
+	if productID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "productId required"})
+		return
+	}
+	qty := body.Quantity
+	if qty <= 0 {
+		qty = 1
+	}
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	if mode != "gift" && mode != "extra" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `mode must be "gift" or "extra"`})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	switch o.Status {
+	case "pending_payment", "paid", "awaiting_shipment":
+		// editable
+	default:
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":  "não dá pra editar itens depois que o pedido foi enviado, cancelado ou falhou",
+			"status": o.Status,
+		})
+		return
+	}
+
+	prod, err := deps.Products.get(ctx, productID)
+	if err != nil || prod == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "produto não encontrado"})
+		return
+	}
+	if size != "" && len(prod.Sizes) > 0 {
+		offered := false
+		for _, s := range prod.Sizes {
+			if strings.EqualFold(s, size) {
+				size = s
+				offered = true
+				break
+			}
+		}
+		if !offered {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tamanho não disponível"})
+			return
+		}
+	}
+
+	// "Gift" lines record price 0 so the row is visually obvious in
+	// the admin/email/etiqueta and so a future re-totalize call would
+	// stay correct. "Extra" uses the catalog price (Pix or card,
+	// matching the order's payment_method) so the operator can't
+	// accidentally undercharge.
+	unitPrice := 0
+	if mode == "extra" {
+		unitPrice = prod.PriceCents
+		if strings.EqualFold(o.PaymentMethod, "pix") && prod.PixPriceCents > 0 {
+			unitPrice = prod.PixPriceCents
+		}
+	}
+	newItem := orderItem{
+		ProductID:      prod.ID,
+		ProductName:    prod.Name,
+		Size:           size,
+		Quantity:       qty,
+		UnitPriceCents: unitPrice,
+	}
+	if _, err := orders.addItem(ctx, orderID, newItem, mode == "extra"); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist item failed"})
+		return
+	}
+	if rem, err := deps.Products.decrementStockBySize(ctx, prod.ID, size, qty); err != nil {
+		log.Printf("admin add-item: stock decrement %s/%s: %v", prod.ID, size, err)
+	} else if rem > 0 {
+		log.Printf("admin add-item: oversold %s/%s by %d (order %s)", prod.ID, size, rem, orderID)
+	}
+
+	updated, _, _ := orders.get(ctx, orderID)
+	if updated == nil {
+		updated = o
 	}
 	writeJSON(w, http.StatusOK, toAdminOrderDetail(updated))
 }

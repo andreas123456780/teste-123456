@@ -452,6 +452,24 @@ export const adminOrdersApi = {
       token,
       { method: "POST" },
     ),
+  addItem: (
+    token: string,
+    orderId: string,
+    payload: {
+      productId: string;
+      size: string;
+      quantity: number;
+      mode: "gift" | "extra";
+    },
+  ) =>
+    adminRequest<AdminOrder>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}/items`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
 };
 
 export const adminCouponsApi = {

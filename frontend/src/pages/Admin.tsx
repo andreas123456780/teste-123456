@@ -780,6 +780,21 @@ function OrdersAdmin({ token }: { token: string }) {
     }
   }
 
+  async function handleAddItem(
+    id: string,
+    payload: { productId: string; size: string; quantity: number; mode: "gift" | "extra" },
+  ) {
+    setBusyId(id);
+    try {
+      await adminOrdersApi.addItem(token, id, payload);
+      await load();
+    } catch (e) {
+      alert("Falha ao adicionar item: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function handleMarkPaid(id: string) {
     if (
       !window.confirm(
@@ -906,12 +921,14 @@ function OrdersAdmin({ token }: { token: string }) {
             )}
             {selected && <OrderDetail
               order={selected}
+              token={token}
               busy={busyId === selected.orderId}
               onRetry={() => void handleRetry(selected.orderId)}
               onDelete={() => void handleDelete(selected.orderId)}
               onRefreshTracking={() => void handleRefreshTracking(selected.orderId)}
               onMarkShipped={(code) => void handleMarkShipped(selected.orderId, code)}
               onMarkPaid={() => void handleMarkPaid(selected.orderId)}
+              onAddItem={(payload) => void handleAddItem(selected.orderId, payload)}
             />}
           </aside>
         </div>
@@ -922,20 +939,24 @@ function OrdersAdmin({ token }: { token: string }) {
 
 function OrderDetail({
   order,
+  token,
   busy,
   onRetry,
   onDelete,
   onRefreshTracking,
   onMarkShipped,
   onMarkPaid,
+  onAddItem,
 }: {
   order: AdminOrder;
+  token: string;
   busy: boolean;
   onRetry: () => void;
   onDelete: () => void;
   onRefreshTracking: () => void;
   onMarkShipped: (trackingCode: string) => void;
   onMarkPaid: () => void;
+  onAddItem: (payload: { productId: string; size: string; quantity: number; mode: "gift" | "extra" }) => void;
 }) {
   const canRetryLabel = order.status === "paid" && !order.trackingCode;
   const isAwaitingShipment = order.status === "awaiting_shipment";
@@ -944,6 +965,13 @@ function OrderDetail({
   const canConfirmPix =
     order.status === "pending_payment" &&
     order.paymentMethod.toLowerCase() === "pix";
+  // Adicionar item: liberado em qualquer status que não seja final.
+  // Depois de shipped/canceled/failed o pacote físico já foi cortado e
+  // editar a lista só causaria divergência com a etiqueta.
+  const canAddItem =
+    order.status === "pending_payment" ||
+    order.status === "paid" ||
+    order.status === "awaiting_shipment";
   // Always offer the manual tracking input on any paid-but-unshipped
   // order, even when SuperFrete hasn't (or couldn't) put a row in the
   // cart yet. Lets the operator skip the SuperFrete flow entirely —
@@ -1067,6 +1095,8 @@ function OrderDetail({
         </ul>
       </div>
 
+      {canAddItem && <AddOrderItemPanel token={token} order={order} busy={busy} onAddItem={onAddItem} />}
+
       {canConfirmPix && (
         <div className="space-y-2 rounded border border-emerald-300 bg-emerald-50 p-3">
           <h4 className="text-sm font-semibold text-emerald-900">
@@ -1183,6 +1213,212 @@ function OrderDetail({
           {busy ? "Apagando…" : "Apagar pedido"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// AddOrderItemPanel renders the "adicionar peça ao pedido" surface in
+// the order detail aside. The operator picks a catalog product, size,
+// quantity, and decides on the spot whether the item is a courtesy
+// (gift, totals untouched) or an upsell (extra, cart total bumps).
+//
+// Products are fetched lazily on first expand to avoid an extra API
+// call for orders the operator only views.
+function AddOrderItemPanel({
+  token,
+  order,
+  busy,
+  onAddItem,
+}: {
+  token: string;
+  order: AdminOrder;
+  busy: boolean;
+  onAddItem: (payload: {
+    productId: string;
+    size: string;
+    quantity: number;
+    mode: "gift" | "extra";
+  }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [products, setProducts] = useState<Product[] | null>(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [productId, setProductId] = useState("");
+  const [size, setSize] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [mode, setMode] = useState<"gift" | "extra">("gift");
+
+  useEffect(() => {
+    if (!open || products !== null) return;
+    let cancelled = false;
+    void adminApi
+      .list(token)
+      .then((list) => {
+        if (cancelled) return;
+        setProducts(list);
+        if (list.length > 0) {
+          setProductId(list[0].id);
+          setSize(list[0].sizes?.[0] ?? "");
+        }
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, products, token]);
+
+  const selected = products?.find((p) => p.id === productId);
+  const sizesAvailable = selected?.sizes ?? [];
+  const isPix = order.paymentMethod.toLowerCase() === "pix";
+  const previewUnit = selected
+    ? mode === "gift"
+      ? 0
+      : isPix && selected.pixPriceCents
+      ? selected.pixPriceCents
+      : selected.priceCents
+    : 0;
+  const previewDelta = previewUnit * quantity;
+
+  function submit() {
+    if (!productId) {
+      alert("Escolha um produto.");
+      return;
+    }
+    if (sizesAvailable.length > 0 && !size) {
+      alert("Escolha um tamanho.");
+      return;
+    }
+    const verb = mode === "gift" ? "como brinde (sem cobrar)" : `cobrando ${moneyBR(previewDelta)} a mais`;
+    if (
+      !window.confirm(
+        `Adicionar ${quantity}× ${selected?.name ?? productId} (${size || "—"}) ${verb}?`,
+      )
+    ) {
+      return;
+    }
+    onAddItem({ productId, size, quantity, mode });
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full rounded border border-dashed border-neutral-400 px-3 py-2 text-sm text-neutral-600 hover:border-neutral-700 hover:text-neutral-900"
+      >
+        + Adicionar item ao pedido
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded border border-blue-300 bg-blue-50 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <h4 className="text-sm font-semibold text-blue-900">Adicionar item</h4>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-xs text-blue-700 hover:underline"
+        >
+          fechar
+        </button>
+      </div>
+      {loadErr && <p className="text-sm text-red-600">{loadErr}</p>}
+      {!products && !loadErr && <p className="text-sm text-blue-800">Carregando produtos…</p>}
+      {products && (
+        <div className="space-y-2">
+          <label className="block text-xs uppercase text-blue-900">
+            Produto
+            <select
+              value={productId}
+              onChange={(e) => {
+                setProductId(e.target.value);
+                const p = products.find((it) => it.id === e.target.value);
+                setSize(p?.sizes?.[0] ?? "");
+              }}
+              className="mt-1 block w-full rounded border border-blue-300 bg-white px-2 py-1 text-sm normal-case text-neutral-900"
+            >
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {sizesAvailable.length > 0 && (
+            <label className="block text-xs uppercase text-blue-900">
+              Tamanho
+              <select
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+                className="mt-1 block w-full rounded border border-blue-300 bg-white px-2 py-1 text-sm normal-case text-neutral-900"
+              >
+                {sizesAvailable.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="block text-xs uppercase text-blue-900">
+            Quantidade
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={quantity}
+              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className="mt-1 block w-24 rounded border border-blue-300 bg-white px-2 py-1 text-sm text-neutral-900"
+            />
+          </label>
+          <fieldset className="rounded border border-blue-200 bg-white px-3 py-2">
+            <legend className="px-1 text-xs uppercase text-blue-900">Modo</legend>
+            <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-neutral-800">
+              <input
+                type="radio"
+                name={`add-mode-${order.orderId}`}
+                checked={mode === "gift"}
+                onChange={() => setMode("gift")}
+              />
+              <span>
+                <strong>Brinde</strong> — total não muda. Estoque baixa normal.
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-neutral-800">
+              <input
+                type="radio"
+                name={`add-mode-${order.orderId}`}
+                checked={mode === "extra"}
+                onChange={() => setMode("extra")}
+              />
+              <span>
+                <strong>Cobrar extra</strong> — soma{" "}
+                {selected ? moneyBR(previewDelta) : "—"} no total. Você cobra a
+                diferença por fora (Pix manual).
+              </span>
+            </label>
+          </fieldset>
+          {order.status === "awaiting_shipment" && (
+            <p className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
+              Aviso: esse pedido já está no carrinho do SuperFrete. Se a
+              etiqueta foi paga/impressa, ela não vai incluir o item novo —
+              refaça pelo botão "Gerar etiqueta" antes de despachar.
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={busy || !productId}
+            onClick={submit}
+            className="rounded bg-blue-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            {busy ? "Adicionando…" : "Adicionar item"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
