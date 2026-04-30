@@ -33,7 +33,7 @@ var errProductNotFound = errors.New("product not found")
 func (s *productsStore) listPublic(ctx context.Context, category string) ([]Product, error) {
 	const baseQ = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
 		colors_json, sizes_json, tags_json, stock, stock_by_size
-		FROM products WHERE hidden = 0`
+		FROM products WHERE hidden = 0 AND stock > 0`
 	q := baseQ + " ORDER BY sort_order ASC, id ASC"
 	args := []any{}
 	if category != "" {

@@ -99,4 +99,20 @@ export const FALLBACK_PRODUCTS: Product[] = [
     stock: 12,
     stockBySize: { "Baby Look": 12 },
   },
+  {
+    id: "p-test-checkout",
+    name: "PRODUTO TESTE — NÃO COMPRAR",
+    description:
+      "Item de teste para validar o checkout com cartão. Será removido do catálogo após os testes.",
+    priceCents: 100,
+    pixPriceCents: 100,
+    category: "Camisetas",
+    image: "tee-cursive-black.jpeg",
+    backImage: "tee-cursive-black-back.jpeg",
+    colors: ["preto"],
+    sizes: ["P"],
+    tags: ["teste"],
+    stock: 2,
+    stockBySize: { P: 2 },
+  },
 ];
