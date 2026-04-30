@@ -780,6 +780,26 @@ function OrdersAdmin({ token }: { token: string }) {
     }
   }
 
+  async function handleMarkPaid(id: string) {
+    if (
+      !window.confirm(
+        "Confirmar que o cliente pagou esse pedido por Pix? O estoque será baixado e o cliente vai receber o email de confirmação.",
+      )
+    ) {
+      return;
+    }
+    setBusyId(id);
+    try {
+      await adminOrdersApi.markPaid(token, id);
+      alert("Pedido marcado como pago. Agora você consegue colar o código de rastreio.");
+      await load();
+    } catch (e) {
+      alert("Falha: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function handleMarkShipped(id: string, trackingCode: string) {
     const code = trackingCode.trim();
     if (!code) {
@@ -891,6 +911,7 @@ function OrdersAdmin({ token }: { token: string }) {
               onDelete={() => void handleDelete(selected.orderId)}
               onRefreshTracking={() => void handleRefreshTracking(selected.orderId)}
               onMarkShipped={(code) => void handleMarkShipped(selected.orderId, code)}
+              onMarkPaid={() => void handleMarkPaid(selected.orderId)}
             />}
           </aside>
         </div>
@@ -906,6 +927,7 @@ function OrderDetail({
   onDelete,
   onRefreshTracking,
   onMarkShipped,
+  onMarkPaid,
 }: {
   order: AdminOrder;
   busy: boolean;
@@ -913,9 +935,15 @@ function OrderDetail({
   onDelete: () => void;
   onRefreshTracking: () => void;
   onMarkShipped: (trackingCode: string) => void;
+  onMarkPaid: () => void;
 }) {
   const canRetryLabel = order.status === "paid" && !order.trackingCode;
   const isAwaitingShipment = order.status === "awaiting_shipment";
+  // Pix recebido por fora (WhatsApp) — operador confirma manualmente.
+  // Cartão é controlado pelo Stripe webhook, então não aparece esse botão.
+  const canConfirmPix =
+    order.status === "pending_payment" &&
+    order.paymentMethod.toLowerCase() === "pix";
   // Always offer the manual tracking input on any paid-but-unshipped
   // order, even when SuperFrete hasn't (or couldn't) put a row in the
   // cart yet. Lets the operator skip the SuperFrete flow entirely —
@@ -1038,6 +1066,28 @@ function OrderDetail({
           ))}
         </ul>
       </div>
+
+      {canConfirmPix && (
+        <div className="space-y-2 rounded border border-emerald-300 bg-emerald-50 p-3">
+          <h4 className="text-sm font-semibold text-emerald-900">
+            Confirmar pagamento Pix
+          </h4>
+          <p className="text-xs text-emerald-800">
+            O cliente foi pro WhatsApp pra finalizar o Pix. Quando você
+            confirmar o recebimento na sua conta, clique no botão pra marcar
+            o pedido como pago — isso baixa estoque, libera o campo de
+            rastreio e dispara o email de confirmação.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onMarkPaid}
+            className="rounded bg-emerald-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            {busy ? "Confirmando…" : "Marcar como pago"}
+          </button>
+        </div>
+      )}
 
       {canManualShip && (
         <div className="space-y-3 rounded border border-amber-300 bg-amber-50 p-3">
