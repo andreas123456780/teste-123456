@@ -1,4 +1,5 @@
-import { motion, useScroll, useTransform } from "framer-motion";
+import { motion, useAnimationControls, useScroll, useTransform } from "framer-motion";
+import { useEffect, useRef } from "react";
 import { NastLogo } from "./NastLogo";
 import { Instagram, Linktree, ShoppingBag } from "./icons";
 import { useAuth } from "../lib/useAuth";
@@ -18,6 +19,21 @@ export function Header({ cartCount, onOpenCart }: Props) {
   // signed-in user's first name with a Sair button. When auth is
   // disabled server-side (503), the affordance is hidden entirely.
   const auth = useAuth();
+  // Wiggle the bag icon every time the counter goes up. We compare
+  // against the previous value via a ref so a manual decrement (qty
+  // -1 in the cart) doesn't fire the animation.
+  const bagControls = useAnimationControls();
+  const lastCount = useRef(cartCount);
+  useEffect(() => {
+    if (cartCount > lastCount.current) {
+      bagControls.start({
+        rotate: [0, -14, 12, -8, 0],
+        scale: [1, 1.18, 1.08, 1.12, 1],
+        transition: { duration: 0.55, ease: "easeOut" },
+      });
+    }
+    lastCount.current = cartCount;
+  }, [cartCount, bagControls]);
   const { scrollY } = useScroll();
   const bg = useTransform(scrollY, [0, 120], [
     "rgba(6,6,6,0)",
@@ -54,7 +70,7 @@ export function Header({ cartCount, onOpenCart }: Props) {
           {[
             ["Loja", "#products"],
             ["Medidas", "#products"],
-            ["Manifesto", "#story"],
+            ["Manifesto", "/sobre"],
             ["Contato", "#newsletter"],
           ].map(([label, href]) => (
             <motion.a
@@ -133,7 +149,9 @@ export function Header({ cartCount, onOpenCart }: Props) {
             whileTap={{ scale: 0.97 }}
             className="relative flex items-center gap-2 border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
-            <ShoppingBag className="h-4 w-4" />
+            <motion.span animate={bagControls} className="inline-flex">
+              <ShoppingBag className="h-4 w-4" />
+            </motion.span>
             <span className="hidden sm:inline">Sacola</span>
             {cartCount > 0 && (
               <motion.span

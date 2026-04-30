@@ -38,6 +38,7 @@ export function Footer({ whatsAppNumber }: Props = {}) {
             Ajuda
           </div>
           <ul className="space-y-2">
+            <li><a href="/sobre" className="hover:text-white">Sobre a NAST</a></li>
             <li><a href="/trocas" className="hover:text-white">Trocas e devoluções</a></li>
             <li><a href="/trocas#envio" className="hover:text-white">Envio e rastreio</a></li>
             <li><a href="/privacidade" className="hover:text-white">Privacidade</a></li>

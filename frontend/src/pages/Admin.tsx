@@ -1,13 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   adminApi,
   adminAuthApi,
   adminCouponsApi,
   adminOrdersApi,
+  adminSettingsApi,
   type AdminCouponPayload,
   type AdminOrder,
   type AdminProductPayload,
   type AdminStats,
+  type CountdownSettings,
 } from "../api";
 import type { Coupon, Product } from "../types";
 
@@ -20,7 +29,7 @@ import type { Coupon, Product } from "../types";
 // compare). The UI never ships privileged data statically.
 const TOKEN_STORAGE = "nast:admin-token:v1";
 
-type Tab = "dashboard" | "orders" | "products" | "coupons";
+type Tab = "dashboard" | "orders" | "products" | "coupons" | "settings";
 
 function emptyProduct(): AdminProductPayload {
   return {
@@ -318,6 +327,7 @@ export function AdminPage() {
           ["orders", "Pedidos"],
           ["products", "Produtos"],
           ["coupons", "Cupons"],
+          ["settings", "Site"],
         ] as const).map(([id, label]) => {
           const active = tab === id;
           return (
@@ -341,6 +351,7 @@ export function AdminPage() {
       {tab === "orders" && <OrdersAdmin token={token} />}
       {tab === "products" && <ProductsAdmin token={token} />}
       {tab === "coupons" && <CouponsAdmin token={token} />}
+      {tab === "settings" && <SettingsAdmin token={token} />}
       </main>
     </div>
   );
@@ -905,6 +916,14 @@ function OrderDetail({
 }) {
   const canRetryLabel = order.status === "paid" && !order.trackingCode;
   const isAwaitingShipment = order.status === "awaiting_shipment";
+  // Always offer the manual tracking input on any paid-but-unshipped
+  // order, even when SuperFrete hasn't (or couldn't) put a row in the
+  // cart yet. Lets the operator skip the SuperFrete flow entirely —
+  // useful when the label was generated outside the system or when
+  // /api/v0/cart fails for reasons we can't auto-recover from.
+  const canManualShip =
+    !order.trackingCode &&
+    (order.status === "paid" || order.status === "awaiting_shipment");
   const [manualTracking, setManualTracking] = useState("");
   return (
     <div className="space-y-4">
@@ -1020,43 +1039,56 @@ function OrderDetail({
         </ul>
       </div>
 
-      {isAwaitingShipment && (
+      {canManualShip && (
         <div className="space-y-3 rounded border border-amber-300 bg-amber-50 p-3">
           <div>
             <h4 className="text-sm font-semibold text-amber-900">
-              Etiqueta no carrinho do SuperFrete
+              {isAwaitingShipment
+                ? "Etiqueta no carrinho do SuperFrete"
+                : "Marcar como enviado"}
             </h4>
-            <p className="mt-1 text-xs text-amber-800">
-              O pedido já está na sua conta do SuperFrete como{" "}
-              <strong>aguardando pagamento</strong>.{" "}
-              <a
-                href="https://web.superfrete.com/#/cart"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                abrir carrinho
-              </a>
-              {" · "}
-              pague pelo app (Pix costuma ser mais barato), imprima e posta.
-              Depois volte aqui para:
-            </p>
+            {isAwaitingShipment ? (
+              <p className="mt-1 text-xs text-amber-800">
+                O pedido já está na sua conta do SuperFrete como{" "}
+                <strong>aguardando pagamento</strong>.{" "}
+                <a
+                  href="https://web.superfrete.com/#/cart"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  abrir carrinho
+                </a>
+                {" · "}
+                pague pelo app (Pix costuma ser mais barato), imprima e posta.
+                Depois volte aqui para:
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-amber-800">
+                Pagamento confirmado. Você pode tentar gerar a etiqueta pelo
+                SuperFrete (botão "Gerar etiqueta" abaixo) ou{" "}
+                <strong>colar manualmente</strong> o código de rastreio dos
+                Correios — útil quando você imprimiu a etiqueta por fora.
+              </p>
+            )}
             {order.superfreteId && (
               <p className="mt-1 font-mono text-xs text-amber-700">
                 ID SuperFrete: {order.superfreteId}
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onRefreshTracking}
-              className="rounded border border-amber-700 bg-white px-3 py-1.5 text-sm text-amber-900 disabled:opacity-50"
-            >
-              {busy ? "Consultando…" : "Atualizar rastreio do SuperFrete"}
-            </button>
-          </div>
+          {isAwaitingShipment && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onRefreshTracking}
+                className="rounded border border-amber-700 bg-white px-3 py-1.5 text-sm text-amber-900 disabled:opacity-50"
+              >
+                {busy ? "Consultando…" : "Atualizar rastreio do SuperFrete"}
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="text"
@@ -1801,4 +1833,235 @@ function CouponEditForm({
       </div>
     </div>
   );
+}
+
+// ----- Settings tab -----
+
+// SettingsAdmin currently exposes a single key — the storefront
+// countdown — but is structured as a generic settings hub so we can
+// drop in announcement banners, hero CTAs, etc. without restructuring
+// the tab.
+function SettingsAdmin({ token }: { token: string }) {
+  return (
+    <div className="space-y-6">
+      <CountdownAdmin token={token} />
+    </div>
+  );
+}
+
+const DEFAULT_COUNTDOWN: CountdownSettings = {
+  visible: false,
+  title: "PRÓXIMO DROP",
+  subtitle: "Edição limitada — peças numeradas",
+  targetAt: "",
+  ctaLabel: "Avise-me",
+  ctaUrl: "",
+  endedLabel: "Drop liberado",
+};
+
+function CountdownAdmin({ token }: { token: string }) {
+  const [settings, setSettings] = useState<CountdownSettings | null>(null);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    adminSettingsApi
+      .getCountdown(token)
+      .then((data) => {
+        if (!cancelled) setSettings(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setErr(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const update = (patch: Partial<CountdownSettings>) =>
+    setSettings((prev) => ({ ...(prev ?? DEFAULT_COUNTDOWN), ...patch }));
+
+  const save = async () => {
+    if (!settings) return;
+    setErr("");
+    setSaving(true);
+    try {
+      // Convert <input type="datetime-local"> to RFC3339 with the
+      // local timezone offset so the backend round-trips cleanly.
+      const payload: CountdownSettings = {
+        ...settings,
+        targetAt: localDateTimeToRfc3339(settings.targetAt),
+      };
+      const saved = await adminSettingsApi.saveCountdown(token, payload);
+      setSettings(saved);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings && !err) {
+    return (
+      <div className="rounded border border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+        Carregando…
+      </div>
+    );
+  }
+
+  const value = settings ?? DEFAULT_COUNTDOWN;
+  return (
+    <section className="rounded border border-neutral-200 bg-white p-6">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Countdown — próximo drop</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            Bloco que aparece na home, acima dos produtos. Quando desligado, a
+            seção some completamente do site.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={value.visible}
+            onChange={(e) => update({ visible: e.target.checked })}
+            className="h-4 w-4"
+          />
+          <span className="font-medium">Visível</span>
+        </label>
+      </header>
+
+      {err && (
+        <div className="mt-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {err}
+        </div>
+      )}
+
+      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Field label="Título">
+          <input
+            type="text"
+            value={value.title}
+            onChange={(e) => update({ title: e.target.value })}
+            placeholder="PRÓXIMO DROP"
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+        </Field>
+        <Field label="Subtítulo">
+          <input
+            type="text"
+            value={value.subtitle}
+            onChange={(e) => update({ subtitle: e.target.value })}
+            placeholder="Edição limitada — peças numeradas"
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+        </Field>
+        <Field label="Data e hora do drop">
+          <input
+            type="datetime-local"
+            value={rfc3339ToLocalDateTime(value.targetAt)}
+            onChange={(e) => update({ targetAt: e.target.value })}
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-[11px] text-neutral-500">
+            Deixar em branco mostra apenas a mensagem de “Drop liberado”.
+          </p>
+        </Field>
+        <Field label="Mensagem após terminar">
+          <input
+            type="text"
+            value={value.endedLabel}
+            onChange={(e) => update({ endedLabel: e.target.value })}
+            placeholder="Drop liberado"
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+        </Field>
+        <Field label="Botão (texto)">
+          <input
+            type="text"
+            value={value.ctaLabel}
+            onChange={(e) => update({ ctaLabel: e.target.value })}
+            placeholder="Avise-me"
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+        </Field>
+        <Field label="Botão (link)">
+          <input
+            type="url"
+            value={value.ctaUrl}
+            onChange={(e) => update({ ctaUrl: e.target.value })}
+            placeholder="https://wa.me/55..."
+            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-[11px] text-neutral-500">
+            Sem link, o botão não aparece.
+          </p>
+        </Field>
+      </div>
+
+      <div className="mt-6 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="rounded bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+        >
+          {saving ? "Salvando…" : "Salvar"}
+        </button>
+        {savedAt && !saving && (
+          <span className="text-xs text-emerald-700">
+            Salvo {new Date(savedAt).toLocaleTimeString("pt-BR")}.
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+// rfc3339ToLocalDateTime converts an RFC3339 timestamp into the
+// "YYYY-MM-DDTHH:mm" string that <input type="datetime-local">
+// expects. Returns "" when the input is empty or unparseable.
+function rfc3339ToLocalDateTime(value: string): string {
+  if (!value) return "";
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return "";
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+// localDateTimeToRfc3339 converts the datetime-local string back into
+// RFC3339 (with the browser timezone offset). The backend re-normalizes
+// to UTC, so the round trip is lossless.
+function localDateTimeToRfc3339(value: string): string {
+  if (!value) return "";
+  // <input type="datetime-local"> doesn't include seconds — append :00
+  // before parsing so Date can resolve it consistently.
+  const normalized = value.length === 16 ? `${value}:00` : value;
+  const ts = Date.parse(normalized);
+  if (Number.isNaN(ts)) return "";
+  return new Date(ts).toISOString();
 }

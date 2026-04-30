@@ -1131,6 +1131,9 @@ func main() {
 		log.Printf("instagram: INSTAGRAM_ACCESS_TOKEN + INSTAGRAM_USER_ID not set — feed widget will be hidden")
 	}
 	mux.HandleFunc("/api/social/instagram", handleInstagramFeed(igClient))
+	settings := newSettingsStore(db)
+	mux.HandleFunc("/api/settings", handlePublicSettings(settings))
+	mux.HandleFunc("/api/admin/settings", adminAuthFromCfg(adminCfg, handleAdminSettings(settings)))
 	mux.HandleFunc("/api/admin/login", handleAdminLogin(adminCfg))
 	mux.HandleFunc("/api/admin/products", adminAuthFromCfg(adminCfg, handleAdminProducts(products)))
 	mux.HandleFunc("/api/admin/products/", adminAuthFromCfg(adminCfg, handleAdminProductByID(products)))

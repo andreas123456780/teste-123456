@@ -3,6 +3,14 @@ import { useMemo, useState } from "react";
 import type { Product } from "../types";
 import { ProductCard } from "./ProductCard";
 import { ProductCardSkeleton } from "./ProductCardSkeleton";
+import { ProductFilters } from "./ProductFilters";
+import {
+  applyFilters,
+  deriveFilterBounds,
+  emptyFilterState,
+  pruneFiltersToBounds,
+  type ProductFilterState,
+} from "../lib/productFilters";
 import { SizeChartPanel, SizeChartLink } from "./SizeChart";
 import { WhatsApp } from "./icons";
 
@@ -34,13 +42,28 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   }, [products]);
   const [activeCategory, setActiveCategory] = useState("Todas");
 
+  const bounds = useMemo(() => deriveFilterBounds(products), [products]);
+  const [filters, setFilters] = useState<ProductFilterState>(() =>
+    emptyFilterState(),
+  );
+
+  // Drop sizes/colors the catalog no longer offers so a stale filter
+  // can't render the grid empty. priceMaxCents=null is the default
+  // ("no max"), which already adapts when bounds change.
+  const liveFilters = useMemo(
+    () => pruneFiltersToBounds(filters, bounds),
+    [filters, bounds],
+  );
+
   const filtered = useMemo(() => {
-    return activeCategory === "Todas"
-      ? products
-      : products.filter(
-          (p) => normalizeCategory(p.category) === activeCategory,
-        );
-  }, [products, activeCategory]);
+    const byCategory =
+      activeCategory === "Todas"
+        ? products
+        : products.filter(
+            (p) => normalizeCategory(p.category) === activeCategory,
+          );
+    return applyFilters(byCategory, liveFilters, bounds);
+  }, [products, activeCategory, liveFilters, bounds]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
@@ -99,7 +122,15 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
         </div>
       </motion.div>
 
-      <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
+      <div className="mt-8">
+        <ProductFilters
+          bounds={bounds}
+          filters={filters}
+          onChange={setFilters}
+        />
+      </div>
+
+      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {loading && filtered.length === 0 ? (
             <>

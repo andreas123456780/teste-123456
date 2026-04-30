@@ -44,6 +44,18 @@ export type ShippingOption = {
   error?: string;
 };
 
+export type CountdownSettings = {
+  visible: boolean;
+  title: string;
+  subtitle: string;
+  /** RFC3339 string. Empty means "no target set" — frontend hides the
+   * timer or shows the ended label depending on Visible. */
+  targetAt: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  endedLabel: string;
+};
+
 export const api = {
   listProducts: (category?: string) =>
     request<Product[]>(
@@ -103,6 +115,8 @@ export const api = {
     ),
   getOrderByToken: (token: string) =>
     request<PublicOrder>(`/api/orders/${encodeURIComponent(token)}`),
+  getCountdown: () =>
+    request<CountdownSettings>(`/api/settings?key=countdown`),
 };
 
 // AuthUser mirrors backend authMeResponse. Returned by every
@@ -454,4 +468,14 @@ export const adminCouponsApi = {
       token,
       { method: "DELETE" },
     ),
+};
+
+export const adminSettingsApi = {
+  getCountdown: (token: string) =>
+    adminRequest<CountdownSettings>(`/api/admin/settings?key=countdown`, token),
+  saveCountdown: (token: string, payload: CountdownSettings) =>
+    adminRequest<CountdownSettings>(`/api/admin/settings?key=countdown`, token, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 };
