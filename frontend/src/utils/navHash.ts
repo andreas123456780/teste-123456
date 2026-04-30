@@ -8,7 +8,11 @@
 // the current URL with no effect because the section doesn't exist
 // on that page.
 export function navHrefForHash(hash: string): string {
+  // Absolute URLs and bare paths (e.g. "/sobre") pass through
+  // untouched — they already navigate to the right place from any
+  // route.
   if (typeof window === "undefined") return hash;
+  if (!hash.startsWith("#")) return hash;
   const path = window.location.pathname;
   if (path === "/" || path === "") return hash;
   return `/${hash}`;

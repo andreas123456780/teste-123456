@@ -4,8 +4,11 @@ import { FALLBACK_PRODUCTS } from "./data/fallback";
 import type { CartItem, Product } from "./types";
 
 import { Header } from "./components/Header";
+import { ToastHost } from "./components/ToastHost";
+import { toast } from "./lib/toast";
 import { Hero } from "./components/Hero";
 import { HeroCarousel } from "./components/HeroCarousel";
+import { Countdown } from "./components/Countdown";
 import { Products } from "./components/Products";
 import { Story } from "./components/Story";
 import { Newsletter } from "./components/Newsletter";
@@ -28,6 +31,7 @@ import { Returns } from "./pages/Returns";
 import { AdminPage } from "./pages/Admin";
 import { AuthPage } from "./pages/Auth";
 import { MinhaConta } from "./pages/MinhaConta";
+import { Sobre } from "./pages/Sobre";
 
 const WHATSAPP_NUMBER = "5511910859392";
 const SUPPORT_EMAIL = "contato@nast.com.br";
@@ -44,6 +48,7 @@ type Route =
   | { kind: "privacy" }
   | { kind: "terms" }
   | { kind: "returns" }
+  | { kind: "sobre" }
   | { kind: "admin" }
   | { kind: "login" }
   | { kind: "signup" }
@@ -60,6 +65,14 @@ function parseRoute(pathname: string): Route {
   }
   if (pathname === "/trocas" || pathname === "/trocas/") {
     return { kind: "returns" };
+  }
+  if (
+    pathname === "/sobre" ||
+    pathname === "/sobre/" ||
+    pathname === "/manifesto" ||
+    pathname === "/manifesto/"
+  ) {
+    return { kind: "sobre" };
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { kind: "admin" };
@@ -115,6 +128,9 @@ function App() {
     return (
       <Returns whatsAppNumber={WHATSAPP_NUMBER} supportEmail={SUPPORT_EMAIL} />
     );
+  }
+  if (route.kind === "sobre") {
+    return <Sobre whatsAppNumber={WHATSAPP_NUMBER} />;
   }
   if (route.kind === "admin") {
     return <AdminPage />;
@@ -228,7 +244,23 @@ function Home() {
         }
         return [...prev, { product, size, color, quantity: 1 }];
       });
-      if (options?.openCart ?? true) setCartOpen(true);
+      // "Comprar agora" still pops the drawer open so the user can
+      // finish checkout in one motion. "Adicionar à sacola" only
+      // fires a toast — the cart counter in the header pulses to
+      // confirm the add and the toast offers an explicit CTA to
+      // open the drawer when ready.
+      if (options?.openCart) {
+        setCartOpen(true);
+      } else {
+        const detail = [size, color].filter(Boolean).join(" · ");
+        toast({
+          kind: "success",
+          title: "Adicionado à sacola",
+          description: `${product.name}${detail ? " — " + detail : ""}`,
+          actionLabel: "Ver sacola",
+          onAction: () => setCartOpen(true),
+        });
+      }
     },
     [],
   );
@@ -274,6 +306,7 @@ function Home() {
       <main>
         <Hero />
         <HeroCarousel />
+        <Countdown />
         <Products
           products={products}
           onOpen={openModal}
@@ -306,6 +339,7 @@ function Home() {
 
       <WhatsAppButton phone={WHATSAPP_NUMBER} />
       <CookieBanner />
+      <ToastHost />
       <SeoJsonLd products={products} />
       <LoadingScreen show={loading && !introVisible} />
       {introVisible && <ScanIntro onFinish={() => setIntroVisible(false)} />}
