@@ -291,6 +291,64 @@ func (s *orderStore) recordTrackingFailure(ctx context.Context, orderID, errMsg 
 	return nil
 }
 
+// addItem appends a new order_items row to an existing order in a
+// single transaction. When `bumpTotals` is true the order's
+// total_cents and amount_cents are increased by quantity*unitPrice —
+// the cart total moves up. When false (gift / cortesia) only the row
+// is inserted, totals stay frozen. Returns the line_no assigned to the
+// new row so callers can reflect it in the response.
+//
+// Used by the admin "Adicionar item ao pedido" panel: a Pix order
+// reached the operator on WhatsApp who agreed to throw in a freebie or
+// upsell another shirt while the buyer is still on the line.
+func (s *orderStore) addItem(ctx context.Context, orderID string, item orderItem, bumpTotals bool) (int, error) {
+	if item.Quantity <= 0 {
+		return 0, errors.New("quantity must be positive")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var nextLine int
+	if err := tx.QueryRowContext(ctx, rb(`SELECT COALESCE(MAX(line_no), 0) + 1
+		FROM order_items WHERE order_id = ?`), orderID).Scan(&nextLine); err != nil {
+		return 0, fmt.Errorf("next line_no: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, rb(`INSERT INTO order_items(
+		order_id, line_no, product_id, product_name, size, color, quantity, unit_price_cents
+	) VALUES (?,?,?,?,?,?,?,?)`),
+		orderID, nextLine, item.ProductID, item.ProductName,
+		nullableStr(item.Size), nullableStr(item.Color),
+		item.Quantity, item.UnitPriceCents,
+	); err != nil {
+		return 0, fmt.Errorf("insert item: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if bumpTotals {
+		delta := item.UnitPriceCents * item.Quantity
+		if _, err := tx.ExecContext(ctx, rb(`UPDATE orders SET
+			total_cents  = total_cents  + ?,
+			amount_cents = amount_cents + ?,
+			updated_at   = ?
+			WHERE id = ?`), delta, delta, now, orderID); err != nil {
+			return 0, fmt.Errorf("bump totals: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, rb(`UPDATE orders SET updated_at = ? WHERE id = ?`),
+			now, orderID); err != nil {
+			return 0, fmt.Errorf("touch updated_at: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return nextLine, nil
+}
+
 // listPendingLabels returns paid orders that still don't have a
 // tracking_code, ordered by the next retry deadline. The caller passes
 // a cutoff (now() minus the smallest backoff) so freshly-attempted

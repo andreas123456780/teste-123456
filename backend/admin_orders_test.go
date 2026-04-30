@@ -581,6 +581,141 @@ func TestAdminMarkPaid_RejectsAlreadyPaid(t *testing.T) {
 	}
 }
 
+func TestAdminAddOrderItem_Gift(t *testing.T) {
+	store, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+	prod := catalog[0]
+
+	o := &pendingOrder{
+		ID: "ord_gift", Name: "x", Email: "x@y.z", PaymentMethod: "pix",
+		Status: "paid", TotalCents: 8990, AmountCents: 8990,
+		CreatedAt: time.Now().UTC(),
+		Items: []orderItem{
+			{ProductID: prod.ID, ProductName: prod.Name, Size: "M", Quantity: 1, UnitPriceCents: 8990},
+		},
+	}
+	if err := store.create(context.Background(), o); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, _ := prods.get(context.Background(), prod.ID)
+
+	deps := adminOrderActionDeps{Products: prods}
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, deps))
+	body := `{"productId":"` + prod.ID + `","size":"P","quantity":1,"mode":"gift"}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_gift/items", strings.NewReader(body))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	got, _, _ := store.get(context.Background(), "ord_gift")
+	if got.AmountCents != 8990 {
+		t.Errorf("amount changed: got %d want 8990 (gift should not bump totals)", got.AmountCents)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("items=%d, want 2", len(got.Items))
+	}
+	gift := got.Items[1]
+	if gift.UnitPriceCents != 0 {
+		t.Errorf("gift unit price = %d, want 0", gift.UnitPriceCents)
+	}
+	if gift.Size != "P" {
+		t.Errorf("gift size = %q", gift.Size)
+	}
+	after, _ := prods.get(context.Background(), prod.ID)
+	if after.StockBySize["P"] != before.StockBySize["P"]-1 {
+		t.Errorf("stock P: before=%d after=%d", before.StockBySize["P"], after.StockBySize["P"])
+	}
+}
+
+func TestAdminAddOrderItem_Extra_BumpsTotal(t *testing.T) {
+	store, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+	prod := catalog[0]
+
+	o := &pendingOrder{
+		ID: "ord_extra", Name: "x", Email: "x@y.z", PaymentMethod: "pix",
+		Status: "paid", TotalCents: 8990, AmountCents: 8990,
+		CreatedAt: time.Now().UTC(),
+		Items: []orderItem{
+			{ProductID: prod.ID, ProductName: prod.Name, Size: "M", Quantity: 1, UnitPriceCents: 8990},
+		},
+	}
+	if err := store.create(context.Background(), o); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	deps := adminOrderActionDeps{Products: prods}
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, deps))
+	body := `{"productId":"` + prod.ID + `","size":"M","quantity":1,"mode":"extra"}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_extra/items", strings.NewReader(body))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	got, _, _ := store.get(context.Background(), "ord_extra")
+	// Pix order should pick PixPriceCents (8541) for the second line.
+	wantTotal := 8990 + prod.PixPriceCents
+	if got.AmountCents != wantTotal {
+		t.Errorf("amount = %d, want %d", got.AmountCents, wantTotal)
+	}
+	if got.Items[1].UnitPriceCents != prod.PixPriceCents {
+		t.Errorf("extra unit price = %d, want %d", got.Items[1].UnitPriceCents, prod.PixPriceCents)
+	}
+}
+
+func TestAdminAddOrderItem_RejectsShipped(t *testing.T) {
+	store, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+	putPaidOrderForLabel(t, store, "ord_shipped_addit")
+	if err := store.setTracking(context.Background(), "ord_shipped_addit", "BR0", "u", "l", "sf"); err != nil {
+		t.Fatalf("setTracking: %v", err)
+	}
+	if err := store.setStatus(context.Background(), "ord_shipped_addit", "shipped"); err != nil {
+		t.Fatalf("setStatus: %v", err)
+	}
+
+	deps := adminOrderActionDeps{Products: prods}
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, deps))
+	body := `{"productId":"` + catalog[0].ID + `","size":"M","quantity":1,"mode":"gift"}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_shipped_addit/items", strings.NewReader(body))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("want 409 for shipped order, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAdminAddOrderItem_RejectsInvalidMode(t *testing.T) {
+	store, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+	putTestOrder(t, store, "ord_bad_mode", "x@y.z", "pix", 1000, 0)
+
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{Products: prods}))
+	body := `{"productId":"` + catalog[0].ID + `","size":"M","mode":"freebie"}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_bad_mode/items", strings.NewReader(body))
+	req.Header.Set("X-Admin-Token", "adm")
+	req.Header.Set("Content-Type", "application/json")
+	h(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAdminRetryLabel_MethodNotAllowed(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
