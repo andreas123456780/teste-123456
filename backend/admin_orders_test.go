@@ -96,7 +96,7 @@ func TestAdminRetryLabel_Success(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_retry/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -129,7 +129,7 @@ func TestAdminRetryLabel_WithNameOverride(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_override/retry-label",
 		strings.NewReader(`{"name":"João Silva Santos"}`))
@@ -150,7 +150,7 @@ func TestAdminRetryLabel_InvalidJSON(t *testing.T) {
 	defer cleanup()
 	putPaidOrderForLabel(t, store, "ord_badjson")
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_badjson/retry-label",
 		strings.NewReader(`{"name": bad}`))
@@ -172,7 +172,7 @@ func TestAdminRetryLabel_Failure(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr(), Autopay: true})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_retry_fail/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -186,7 +186,7 @@ func TestAdminRetryLabel_UnknownAction(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_x/bogus", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -222,7 +222,7 @@ func TestAdminRefreshTracking_PullsNewCode(t *testing.T) {
 	labelSuccessHook = func(orderID string) { hookCalledFor = orderID }
 	defer func() { labelSuccessHook = prev }()
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_refresh/refresh-tracking", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -263,7 +263,7 @@ func TestAdminRefreshTracking_NoCodeYet(t *testing.T) {
 	defer srv.Close()
 	ship := newShippingClient(shippingConfig{BaseURL: srv.URL, AccessToken: "tok", OriginZip: "08503000", From: testSenderAddr()})
 
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), 5*time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_wait/refresh-tracking", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -296,7 +296,7 @@ func TestAdminMarkShipped_SavesAndEmails(t *testing.T) {
 	defer func() { labelSuccessHook = prev }()
 
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	body := strings.NewReader(`{"trackingCode":"BR9999BR"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_manual/mark-shipped", body)
@@ -323,7 +323,7 @@ func TestAdminMarkShipped_RequiresCode(t *testing.T) {
 	defer cleanup()
 	putPaidOrderForLabel(t, store, "ord_empty_code")
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_empty_code/mark-shipped",
 		strings.NewReader(`{"trackingCode":"   "}`))
@@ -408,7 +408,7 @@ func TestAdminOrderDetail_Returns404ForMissing(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_nope", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -423,7 +423,7 @@ func TestAdminOrderDetail_IncludesItems(t *testing.T) {
 	defer cleanup()
 	putPaidOrderForLabel(t, store, "ord_detail_a")
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_detail_a", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -448,7 +448,7 @@ func TestAdminOrderDelete_RemovesRow(t *testing.T) {
 	defer cleanup()
 	putPaidOrderForLabel(t, store, "ord_del")
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orders/ord_del", nil)
@@ -470,7 +470,7 @@ func TestAdminOrderDelete_Returns404ForMissing(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orders/ord_nope", nil)
 	req.Header.Set("X-Admin-Token", "adm")
@@ -480,11 +480,112 @@ func TestAdminOrderDelete_Returns404ForMissing(t *testing.T) {
 	}
 }
 
+// fakeEnqueuer captures calls to labelEnqueuer/emailEnqueuer so the
+// mark-paid tests can assert the downstream pipeline ran without
+// standing up SuperFrete and Resend stubs.
+type fakeEnqueuer struct{ ids []string }
+
+func (f *fakeEnqueuer) Enqueue(orderID string) { f.ids = append(f.ids, orderID) }
+
+func TestAdminMarkPaid_PixHappyPath(t *testing.T) {
+	store, db, cleanup := newTestStore(t)
+	defer cleanup()
+	prods := newTestProducts(t, db)
+
+	// Pix order in pending_payment with one item we can decrement
+	// stock against. Product ID matches the seed catalog entry that
+	// newTestProducts loads.
+	prod := catalog[0]
+	o := &pendingOrder{
+		ID:            "ord_pix_paid",
+		Name:          "Andreas Teste",
+		Email:         "buyer@nast.com",
+		Address:       "Rua X, 1",
+		Zip:           "01000-000",
+		PaymentMethod: "pix",
+		Status:        "pending_payment",
+		TotalCents:    prod.PriceCents,
+		AmountCents:   prod.PriceCents,
+		CreatedAt:     time.Now().UTC(),
+		Items: []orderItem{
+			{ProductID: prod.ID, ProductName: prod.Name, Size: "M", Quantity: 1, UnitPriceCents: prod.PriceCents},
+		},
+	}
+	if err := store.create(context.Background(), o); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, _ := prods.get(context.Background(), prod.ID)
+	stockBefore := before.StockBySize["M"]
+
+	label := &fakeEnqueuer{}
+	email := &fakeEnqueuer{}
+	deps := adminOrderActionDeps{Products: prods, LabelJob: label, EmailJob: email}
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, deps))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_pix_paid/mark-paid", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	got, _, _ := store.get(context.Background(), "ord_pix_paid")
+	if got.Status != "paid" {
+		t.Fatalf("status = %q, want paid", got.Status)
+	}
+	after, _ := prods.get(context.Background(), prod.ID)
+	if after.StockBySize["M"] != stockBefore-1 {
+		t.Fatalf("stock M = %d, want %d", after.StockBySize["M"], stockBefore-1)
+	}
+	if len(label.ids) != 1 || label.ids[0] != "ord_pix_paid" {
+		t.Fatalf("label enqueue = %v", label.ids)
+	}
+	if len(email.ids) != 1 || email.ids[0] != "ord_pix_paid" {
+		t.Fatalf("email enqueue = %v", email.ids)
+	}
+}
+
+func TestAdminMarkPaid_RejectsCardOrder(t *testing.T) {
+	// Cartão tem que passar pelo Stripe webhook; o admin não pode
+	// confirmar pagamento manualmente pra não mascarar fraudes.
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putTestOrder(t, store, "ord_card", "buyer@nast.com", "card", 18990, 0)
+
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_card/mark-paid", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for card order, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAdminMarkPaid_RejectsAlreadyPaid(t *testing.T) {
+	store, _, cleanup := newTestStore(t)
+	defer cleanup()
+	putTestOrder(t, store, "ord_already", "x@y.z", "pix", 1000, 0)
+	if err := store.setStatus(context.Background(), "ord_already", "paid"); err != nil {
+		t.Fatalf("seed paid: %v", err)
+	}
+
+	h := adminAuth("adm", handleAdminOrderActions(store, nil, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/orders/ord_already/mark-paid", nil)
+	req.Header.Set("X-Admin-Token", "adm")
+	h(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("want 409 when already paid, got %d", rr.Code)
+	}
+}
+
 func TestAdminRetryLabel_MethodNotAllowed(t *testing.T) {
 	store, _, cleanup := newTestStore(t)
 	defer cleanup()
 	ship := newShippingClient(shippingConfig{AccessToken: "tok", BaseURL: "http://unused"})
-	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second))
+	h := adminAuth("adm", handleAdminOrderActions(store, ship, defaultFakeViaCep(t), time.Second, adminOrderActionDeps{}))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/orders/ord_x/retry-label", nil)
 	req.Header.Set("X-Admin-Token", "adm")

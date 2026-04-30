@@ -9,6 +9,12 @@ package main
 // /api/admin/orders/{id}/retry-label    POST run runLabelJob synchronously
 // /api/admin/orders/{id}/refresh-tracking POST poll SuperFrete for tracking code
 // /api/admin/orders/{id}/mark-shipped   POST save manual tracking + email buyer
+// /api/admin/orders/{id}/mark-paid      POST flip a pending Pix order to paid
+//                                            (Pix-only — card flows go through the
+//                                            Stripe webhook). Triggers the same
+//                                            downstream pipeline as the webhook:
+//                                            stock decrement + label enqueue +
+//                                            confirmation email.
 //
 // All routes are gated by the existing adminAuth middleware (legacy
 // X-Admin-Token or session cookie). The pending-labels list deliberately
@@ -234,7 +240,18 @@ func parseIntOrDefault(s string, def int) int {
 //   - GET    /api/admin/orders/{id}            → full detail
 //   - DELETE /api/admin/orders/{id}            → remove (for cleanup)
 //   - POST   /api/admin/orders/{id}/retry-label → reissue label
-func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *viaCepClient, perOrder time.Duration) http.HandlerFunc {
+// adminOrderActionDeps bundles the optional dependencies the
+// /api/admin/orders/{id}/* endpoints need beyond the base order store.
+// Wrapping them keeps the wiring in main.go small while letting tests
+// inject only what they exercise (e.g. mark-paid tests don't need a
+// SuperFrete client).
+type adminOrderActionDeps struct {
+	Products *productsStore // stock decrement on mark-paid; nil-safe
+	LabelJob labelEnqueuer  // enqueue SuperFrete label after Pix confirm
+	EmailJob emailEnqueuer  // confirmation email after Pix confirm
+}
+
+func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *viaCepClient, perOrder time.Duration, deps adminOrderActionDeps) http.HandlerFunc {
 	if viacep == nil {
 		viacep = newViaCepClient()
 	}
@@ -279,6 +296,8 @@ func handleAdminOrderActions(orders *orderStore, ship *shippingClient, viacep *v
 			adminRefreshTracking(w, r, orders, ship, orderID)
 		case "mark-shipped":
 			adminMarkShipped(w, r, orders, orderID)
+		case "mark-paid":
+			adminMarkPaid(w, r, orders, deps, orderID)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown action"})
 		}
@@ -552,4 +571,73 @@ func adminMarkShipped(w http.ResponseWriter, r *http.Request, orders *orderStore
 		"trackingCode": code,
 		"trackingUrl":  url,
 	})
+}
+
+// adminMarkPaid flips a Pix order from "pending_payment" to "paid". The
+// Pix flow goes through WhatsApp, not Stripe, so the regular
+// payment_intent.succeeded webhook never fires. Without this endpoint
+// the operator has no way to confirm a Pix received off-platform and
+// the order stays stuck — which in turn hides the manual tracking
+// input (it only shows for paid/awaiting_shipment).
+//
+// Card orders deliberately don't accept this endpoint: their state
+// transitions belong to Stripe so we don't accidentally mark something
+// paid that the customer never actually paid for.
+//
+// On success we run the same downstream pipeline the webhook does:
+// decrement stock, enqueue the SuperFrete label, and send the
+// confirmation email.
+func adminMarkPaid(w http.ResponseWriter, r *http.Request, orders *orderStore, deps adminOrderActionDeps, orderID string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	o, ok, err := orders.get(ctx, orderID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	if !strings.EqualFold(o.PaymentMethod, "pix") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "mark-paid só está disponível para pedidos Pix; cartão é controlado pelo Stripe",
+		})
+		return
+	}
+	if o.Status != "pending_payment" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":  "pedido não está aguardando pagamento",
+			"status": o.Status,
+		})
+		return
+	}
+
+	if err := orders.setStatus(ctx, orderID, "paid"); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "status flip failed"})
+		return
+	}
+	if deps.Products != nil {
+		decrementOrderStock(ctx, orders, deps.Products, orderID)
+	}
+	if deps.LabelJob != nil {
+		deps.LabelJob.Enqueue(orderID)
+	}
+	if deps.EmailJob != nil {
+		deps.EmailJob.Enqueue(orderID)
+	}
+
+	// Re-read so the response reflects the row after the label job
+	// (which may have flipped the order to "awaiting_shipment").
+	updated, _, _ := orders.get(ctx, orderID)
+	if updated == nil {
+		updated = o
+		updated.Status = "paid"
+	}
+	writeJSON(w, http.StatusOK, toAdminOrderDetail(updated))
 }

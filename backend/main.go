@@ -1144,7 +1144,11 @@ func main() {
 	mux.HandleFunc("/api/admin/orders", adminAuthFromCfg(adminCfg, handleAdminOrdersList(orders)))
 	mux.HandleFunc("/api/admin/orders/pending-labels", adminAuthFromCfg(adminCfg, handleAdminPendingLabels(orders)))
 	viacepClient := newViaCepClient()
-	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, viacepClient, labelTimeoutFromEnv())))
+	mux.HandleFunc("/api/admin/orders/", adminAuthFromCfg(adminCfg, handleAdminOrderActions(orders, shipClient, viacepClient, labelTimeoutFromEnv(), adminOrderActionDeps{
+		Products: products,
+		LabelJob: labelDisp,
+		EmailJob: emailWrk,
+	})))
 	mux.HandleFunc("/api/internal/jobs/process-labels", handleProcessLabelsJob(internalCfg, orders, shipClient, viacepClient))
 
 	// Customer auth (email/password + Google OAuth). 503s until

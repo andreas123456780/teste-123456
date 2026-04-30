@@ -446,6 +446,12 @@ export const adminOrdersApi = {
         body: JSON.stringify(payload),
       },
     ),
+  markPaid: (token: string, orderId: string) =>
+    adminRequest<AdminOrder>(
+      `/api/admin/orders/${encodeURIComponent(orderId)}/mark-paid`,
+      token,
+      { method: "POST" },
+    ),
 };
 
 export const adminCouponsApi = {
