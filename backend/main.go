@@ -41,7 +41,11 @@ type Product struct {
 	Category      string   `json:"category"`
 	Image         string   `json:"image"`
 	BackImage     string   `json:"backImage"`
-	Colors        []string `json:"colors"`
+	// TransparentImage marks the product image as a transparent PNG so
+	// the storefront drops the white photo backdrop on cards and modal
+	// (it floats on the page background instead).
+	TransparentImage bool     `json:"transparentImage"`
+	Colors           []string `json:"colors"`
 	Sizes         []string `json:"sizes"`
 	Tags          []string `json:"tags"`
 	Stock         int      `json:"stock"`

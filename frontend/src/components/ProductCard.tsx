@@ -28,7 +28,9 @@ export function ProductCard({ product, index, onOpen }: Props) {
       <button
         type="button"
         onClick={() => onOpen(product)}
-        className="relative block aspect-square w-full overflow-hidden bg-white"
+        className={`relative block aspect-square w-full overflow-hidden ${
+          product.transparentImage ? "bg-[var(--color-bg-soft)]" : "bg-white"
+        }`}
         aria-label={`Abrir detalhes de ${product.name}`}
       >
         <motion.div
@@ -41,6 +43,7 @@ export function ProductCard({ product, index, onOpen }: Props) {
             hoverImage={product.backImage}
             alt={product.name}
             size={320}
+            transparent={product.transparentImage}
           />
         </motion.div>
 

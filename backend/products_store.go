@@ -32,7 +32,7 @@ var errProductNotFound = errors.New("product not found")
 // An optional category filter is applied case-insensitively.
 func (s *productsStore) listPublic(ctx context.Context, category string) ([]Product, error) {
 	const baseQ = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
-		colors_json, sizes_json, tags_json, stock, stock_by_size
+		colors_json, sizes_json, tags_json, stock, stock_by_size, transparent_image
 		FROM products WHERE hidden = 0`
 	q := baseQ + " ORDER BY sort_order ASC, id ASC"
 	args := []any{}
@@ -46,14 +46,14 @@ func (s *productsStore) listPublic(ctx context.Context, category string) ([]Prod
 // listAdmin returns every product, hidden or not. Admin only.
 func (s *productsStore) listAdmin(ctx context.Context) ([]Product, error) {
 	const q = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
-		colors_json, sizes_json, tags_json, stock, stock_by_size
+		colors_json, sizes_json, tags_json, stock, stock_by_size, transparent_image
 		FROM products ORDER BY sort_order ASC, id ASC`
 	return s.query(ctx, rb(q))
 }
 
 func (s *productsStore) get(ctx context.Context, id string) (*Product, error) {
 	const q = `SELECT id, name, description, price_cents, pix_price_cents, category, image, back_image,
-		colors_json, sizes_json, tags_json, stock, stock_by_size FROM products WHERE id = ?`
+		colors_json, sizes_json, tags_json, stock, stock_by_size, transparent_image FROM products WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, rb(q), id)
 	p, err := scanProduct(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -70,8 +70,8 @@ func (s *productsStore) upsert(ctx context.Context, p *Product, hidden bool, sor
 	stockBySize, _ := json.Marshal(normalizeStockBySize(p.StockBySize, p.Sizes))
 	const q = `INSERT INTO products
 		(id, name, description, price_cents, pix_price_cents, category, image, back_image,
-		 colors_json, sizes_json, tags_json, stock, stock_by_size, hidden, sort_order, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 colors_json, sizes_json, tags_json, stock, stock_by_size, transparent_image, hidden, sort_order, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
@@ -85,13 +85,14 @@ func (s *productsStore) upsert(ctx context.Context, p *Product, hidden bool, sor
 			tags_json = excluded.tags_json,
 			stock = excluded.stock,
 			stock_by_size = excluded.stock_by_size,
+			transparent_image = excluded.transparent_image,
 			hidden = excluded.hidden,
 			sort_order = excluded.sort_order,
 			updated_at = excluded.updated_at`
 	_, err := s.db.ExecContext(ctx, rb(q),
 		p.ID, p.Name, p.Description, p.PriceCents, p.PixPriceCents, p.Category,
 		p.Image, p.BackImage, string(colors), string(sizes), string(tags),
-		p.Stock, string(stockBySize), boolToInt(hidden), sortOrder, now, now,
+		p.Stock, string(stockBySize), boolToInt(p.TransparentImage), boolToInt(hidden), sortOrder, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert product: %w", err)
@@ -238,9 +239,10 @@ type scannable interface {
 func scanProduct(row scannable) (*Product, error) {
 	var p Product
 	var colors, sizes, tags, stockBySize string
+	var transparent int
 	if err := row.Scan(
 		&p.ID, &p.Name, &p.Description, &p.PriceCents, &p.PixPriceCents, &p.Category,
-		&p.Image, &p.BackImage, &colors, &sizes, &tags, &p.Stock, &stockBySize,
+		&p.Image, &p.BackImage, &colors, &sizes, &tags, &p.Stock, &stockBySize, &transparent,
 	); err != nil {
 		return nil, err
 	}
@@ -248,6 +250,7 @@ func scanProduct(row scannable) (*Product, error) {
 	p.Sizes = parseStringList(sizes)
 	p.Tags = parseStringList(tags)
 	p.StockBySize = parseStockBySize(stockBySize)
+	p.TransparentImage = transparent != 0
 	return &p, nil
 }
 
