@@ -13,6 +13,11 @@ type Props = {
   size?: number;
   className?: string;
   alt?: string;
+  /** When true, render the image without the white photo backdrop so a
+   * transparent-PNG cutout floats on whatever color the parent provides.
+   * Legacy products with JPG photos that have a baked-in white studio
+   * background should leave this false. */
+  transparent?: boolean;
 };
 
 function resolveSrc(image: string): string {
@@ -27,12 +32,14 @@ export function ProductArt({
   size = 260,
   className,
   alt = "",
+  transparent = false,
 }: Props) {
   const src = resolveSrc(image);
   const hoverSrc =
     hoverImage && hoverImage !== image ? resolveSrc(hoverImage) : null;
+  const bgClass = transparent ? "" : " bg-white";
   const baseClass =
-    (className ?? "") + " block h-full w-full object-contain bg-white";
+    (className ?? "") + " block h-full w-full object-contain" + bgClass;
   return (
     <div className="relative h-full w-full">
       <motion.img

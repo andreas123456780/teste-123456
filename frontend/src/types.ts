@@ -15,6 +15,10 @@ export type Product = {
    * means 0 (sold out). An empty map is the legacy shape — callers
    * should fall back to the total `stock` number. */
   stockBySize: Record<string, number>;
+  /** When true, the storefront drops the white photo backdrop on the
+   * product card and modal so a transparent-PNG cutout floats on the
+   * page background. Defaults to false (legacy white-backdrop look). */
+  transparentImage?: boolean;
 };
 
 export type CartItem = {

@@ -101,8 +101,17 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
               <Close className="h-4 w-4" />
             </button>
 
-            <div className="relative flex items-center justify-center bg-white p-6 md:p-10">
-              <ProductArt image={product.image} alt={product.name} size={420} />
+            <div
+              className={`relative flex items-center justify-center p-6 md:p-10 ${
+                product.transparentImage ? "bg-[var(--color-bg-soft)]" : "bg-white"
+              }`}
+            >
+              <ProductArt
+                image={product.image}
+                alt={product.name}
+                size={420}
+                transparent={product.transparentImage}
+              />
             </div>
 
             <div className="flex flex-col overflow-y-auto p-8">

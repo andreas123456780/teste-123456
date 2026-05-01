@@ -46,6 +46,7 @@ function emptyProduct(): AdminProductPayload {
     tags: [],
     stock: 0,
     stockBySize: {},
+    transparentImage: false,
     hidden: false,
   };
 }
@@ -1736,6 +1737,19 @@ function ProductEditForm({
               onChange={(tags) => set("tags", tags)}
               className="rounded border border-neutral-300 px-2 py-1"
             />
+          </label>
+          <label className="col-span-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={value.transparentImage ?? false}
+              onChange={(e) => set("transparentImage", e.target.checked)}
+            />
+            <span>
+              Imagem sem fundo (PNG transparente)
+              <span className="ml-1 text-xs text-neutral-500">
+                — desliga o fundo branco do catálogo/modal pra esse produto
+              </span>
+            </span>
           </label>
           <label className="col-span-2 flex items-center gap-2 text-sm">
             <input
