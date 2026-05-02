@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { Product } from "../types";
 import { ProductArt } from "./ProductArt";
 import { formatBRL, pixDiscountPercent } from "../utils/format";
+import { lowStockLabel } from "../utils/stock";
 
 type Props = {
   product: Product;
@@ -16,6 +17,8 @@ type Props = {
 export function ProductCard({ product, index, onOpen }: Props) {
   const [color, setColor] = useState(product.colors[0] ?? "preto");
   const pixPct = pixDiscountPercent(product.priceCents, product.pixPriceCents);
+  const lowStock = lowStockLabel(product);
+  const isSoldOut = lowStock === "Esgotado";
 
   return (
     <motion.div
@@ -60,6 +63,17 @@ export function ProductCard({ product, index, onOpen }: Props) {
         {pixPct > 0 && (
           <div className="absolute right-3 top-3 bg-[var(--color-accent)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-black">
             -{pixPct}% pix
+          </div>
+        )}
+        {lowStock && (
+          <div
+            className={`absolute bottom-3 left-3 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.25em] backdrop-blur ${
+              isSoldOut
+                ? "bg-black/80 text-white/70"
+                : "bg-red-600/90 text-white"
+            }`}
+          >
+            {lowStock}
           </div>
         )}
       </button>

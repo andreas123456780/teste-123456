@@ -4,6 +4,7 @@ import type { Product } from "../types";
 import { ProductArt } from "./ProductArt";
 import { SizeChartLink } from "./SizeChart";
 import { formatBRL, pixDiscountPercent } from "../utils/format";
+import { lowStockLabel, lowStockLabelForSize } from "../utils/stock";
 import { Close, Plus } from "./icons";
 
 type Props = {
@@ -140,6 +141,17 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                 no pix
               </div>
 
+              {(() => {
+                const label = lowStockLabel(product);
+                if (!label || label === "Esgotado") return null;
+                return (
+                  <div className="mt-4 inline-flex w-fit items-center gap-2 bg-red-600/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.25em] text-white">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                    {label}
+                  </div>
+                );
+              })()}
+
               <p className="mt-6 text-sm leading-relaxed text-white/70">
                 {product.description}
               </p>
@@ -199,6 +211,15 @@ export function ProductModal({ product, preferredSize, onClose, onAdd }: Props) 
                     );
                   })}
                 </div>
+                {(() => {
+                  const sizeLabel = lowStockLabelForSize(product, size);
+                  if (!sizeLabel) return null;
+                  return (
+                    <div className="mt-3 text-[11px] font-semibold uppercase tracking-widest text-red-400">
+                      {sizeLabel}
+                    </div>
+                  );
+                })()}
               </div>
 
               {(() => {
