@@ -32,7 +32,7 @@ export function ProductCard({ product, index, onOpen }: Props) {
         type="button"
         onClick={() => onOpen(product)}
         className={`relative block aspect-square w-full overflow-hidden ${
-          product.transparentImage ? "bg-[var(--color-bg-soft)]" : "bg-white"
+          product.transparentImage ? "bg-[var(--color-bg-soft)]" : "bg-zinc-100"
         }`}
         aria-label={`Abrir detalhes de ${product.name}`}
       >
@@ -157,6 +157,10 @@ function colorSwatch(name: string): string {
     azul: "#1e3a8a",
     bege: "#d6b98c",
     único: "#2a2a2a",
+    vermelho: "#c0392b",
+    laranja: "#e67e22",
+    rosa: "#e91e8c",
+    amarelo: "#f1c40f",
   };
   return map[name] ?? "#444";
 }

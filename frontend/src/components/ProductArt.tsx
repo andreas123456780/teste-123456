@@ -37,7 +37,7 @@ export function ProductArt({
   const src = resolveSrc(image);
   const hoverSrc =
     hoverImage && hoverImage !== image ? resolveSrc(hoverImage) : null;
-  const bgClass = transparent ? "" : " bg-white";
+  const bgClass = transparent ? "" : " bg-zinc-100";
   const baseClass =
     (className ?? "") + " block h-full w-full object-contain" + bgClass;
   return (

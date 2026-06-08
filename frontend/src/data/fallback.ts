@@ -84,6 +84,23 @@ export const FALLBACK_PRODUCTS: Product[] = [
     stockBySize: { "Baby Look": 12 },
   },
   {
+    id: "p-jorge-black",
+    name: "CAMISA NAST JORGE",
+    description:
+      "Camiseta boxy preta com arte exclusiva de São Jorge. Algodão pesado 240g, modelagem oversized e etiqueta tecida NAST.",
+    priceCents: 9990,
+    pixPriceCents: 9491,
+    category: "Boxy",
+    image: "tee-jorge.png",
+    backImage: "tee-jorge.png",
+    transparentImage: true,
+    colors: ["preto"],
+    sizes: ["P", "M", "G"],
+    tags: ["boxy fit", "edição limitada"],
+    stock: 10,
+    stockBySize: { P: 4, M: 4, G: 2 },
+  },
+  {
     id: "p-bb-look-white",
     name: "BABY LOOK NAST TEE",
     description:
