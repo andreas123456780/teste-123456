@@ -56,6 +56,11 @@ export type CountdownSettings = {
   endedLabel: string;
 };
 
+export type SecretSettings = {
+  locked: boolean;
+  code: string;
+};
+
 export const api = {
   listProducts: (category?: string) =>
     request<Product[]>(
@@ -117,6 +122,8 @@ export const api = {
     request<PublicOrder>(`/api/orders/${encodeURIComponent(token)}`),
   getCountdown: () =>
     request<CountdownSettings>(`/api/settings?key=countdown`),
+  getSecret: () =>
+    request<SecretSettings>(`/api/settings?key=secret`),
 };
 
 // AuthUser mirrors backend authMeResponse. Returned by every
@@ -499,6 +506,13 @@ export const adminSettingsApi = {
     adminRequest<CountdownSettings>(`/api/admin/settings?key=countdown`, token),
   saveCountdown: (token: string, payload: CountdownSettings) =>
     adminRequest<CountdownSettings>(`/api/admin/settings?key=countdown`, token, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getSecret: (token: string) =>
+    adminRequest<SecretSettings>(`/api/admin/settings?key=secret`, token),
+  saveSecret: (token: string, payload: SecretSettings) =>
+    adminRequest<SecretSettings>(`/api/admin/settings?key=secret`, token, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
