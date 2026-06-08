@@ -56,6 +56,14 @@ export type CountdownSettings = {
   endedLabel: string;
 };
 
+
+export type BannerSettings = {
+  visible: boolean;
+  text: string;
+  link?: string;
+  linkLabel?: string;
+  bgColor?: 'accent' | 'white' | 'black';
+};
 export type SecretSettings = {
   locked: boolean;
   code: string;
@@ -124,6 +132,8 @@ export const api = {
     request<CountdownSettings>(`/api/settings?key=countdown`),
   getSecret: () =>
     request<SecretSettings>(`/api/settings?key=secret`),
+  getBanner: () =>
+    request<BannerSettings>(`/api/settings?key=banner`),
 };
 
 // AuthUser mirrors backend authMeResponse. Returned by every
@@ -511,6 +521,13 @@ export const adminSettingsApi = {
     }),
   getSecret: (token: string) =>
     adminRequest<SecretSettings>(`/api/admin/settings?key=secret`, token),
+  getBanner: (token: string) =>
+    adminRequest<BannerSettings>(`/api/admin/settings?key=banner`, token),
+  saveBanner: (token: string, payload: BannerSettings) =>
+    adminRequest<BannerSettings>(`/api/admin/settings?key=banner`, token, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   saveSecret: (token: string, payload: SecretSettings) =>
     adminRequest<SecretSettings>(`/api/admin/settings?key=secret`, token, {
       method: "PUT",
