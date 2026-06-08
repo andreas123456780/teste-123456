@@ -47,6 +47,7 @@ export function ProductCard({ product, index, onOpen }: Props) {
             alt={product.name}
             size={320}
             transparent={product.transparentImage}
+            fit="cover"
           />
         </motion.div>
 
