@@ -16,6 +16,7 @@ import {
   type AdminOrder,
   type AdminProductPayload,
   type AdminStats,
+  type BannerSettings,
   type CountdownSettings,
   type SecretSettings,
 } from "../api";
@@ -2147,9 +2148,175 @@ function CouponEditForm({
 function SettingsAdmin({ token }: { token: string }) {
   return (
     <div className="space-y-6">
+      <BannerAdmin token={token} />
       <SecretAdmin token={token} />
       <CountdownAdmin token={token} />
     </div>
+  );
+}
+
+const DEFAULT_BANNER: BannerSettings = {
+  visible: false,
+  text: "Frete gratis com o cupom NASTT",
+  link: "",
+  linkLabel: "",
+  bgColor: "accent",
+};
+
+function BannerAdmin({ token }: { token: string }) {
+  const [settings, setSettings] = useState<BannerSettings | null>(null);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    adminSettingsApi
+      .getBanner(token)
+      .then((data) => {
+        if (!cancelled) setSettings(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setErr(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const update = (patch: Partial<BannerSettings>) =>
+    setSettings((prev) => ({ ...(prev ?? DEFAULT_BANNER), ...patch }));
+
+  const save = async () => {
+    if (!settings) return;
+    setErr("");
+    setSaving(true);
+    try {
+      const saved = await adminSettingsApi.saveBanner(token, settings);
+      setSettings(saved);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings && !err) {
+    return (
+      <div className="rounded border border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+        Carregando…
+      </div>
+    );
+  }
+
+  const value = settings ?? DEFAULT_BANNER;
+  return (
+    <section className="rounded border border-neutral-200 bg-white p-6">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Banner de Anuncio</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            Faixa no topo do site. Ative para mostrar uma mensagem ou promocao.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={value.visible}
+            onChange={(e) => update({ visible: e.target.checked })}
+            className="h-4 w-4"
+          />
+          <span className="font-medium">Ativo</span>
+        </label>
+      </header>
+
+      {err && (
+        <div className="mt-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {err}
+        </div>
+      )}
+
+      <div className="mt-6 space-y-4">
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-neutral-700">
+            Texto do banner <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={value.text}
+            onChange={(e) => update({ text: e.target.value })}
+            placeholder="Frete gratis acima de R$299 — use o cupom NAST10"
+            maxLength={200}
+            className="rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-neutral-700">
+              Link (opcional)
+            </label>
+            <input
+              type="text"
+              value={value.link ?? ""}
+              onChange={(e) => update({ link: e.target.value })}
+              placeholder="/colecao ou https://..."
+              className="rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-neutral-700">
+              Texto do link (opcional)
+            </label>
+            <input
+              type="text"
+              value={value.linkLabel ?? ""}
+              onChange={(e) => update({ linkLabel: e.target.value })}
+              placeholder="Ver colecao"
+              maxLength={60}
+              className="rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-neutral-700">Cor de fundo</label>
+          <div className="flex gap-3">
+            {(["accent", "white", "black"] as const).map((c) => (
+              <label key={c} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="bgColor"
+                  value={c}
+                  checked={(value.bgColor ?? "accent") === c}
+                  onChange={() => update({ bgColor: c })}
+                />
+                <span className={
+                  c === "accent" ? "font-medium text-yellow-600" :
+                  c === "white" ? "font-medium" : "font-medium text-neutral-500"
+                }>
+                  {c === "accent" ? "Amarelo" : c === "white" ? "Branco" : "Preto"}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <footer className="mt-6 flex items-center gap-4 border-t border-neutral-100 pt-4">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="rounded bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {saving ? "Salvando…" : "Salvar banner"}
+        </button>
+        {savedAt && (
+          <span className="text-xs text-green-600">Salvo com sucesso!</span>
+        )}
+      </footer>
+    </section>
   );
 }
 
