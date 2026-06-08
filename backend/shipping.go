@@ -440,6 +440,8 @@ var packagingPresets = map[string]ShippingPackage{
 	"p-bb-look-white": {Width: 25, Height: 3, Length: 30, Weight: 0.18, InsuranceValue: 79.90},
 "p-secret-red":    {Width: 28, Height: 4, Length: 32, Weight: 0.28, InsuranceValue: 129.90},
 "p-jorge-black":   {Width: 28, Height: 4, Length: 32, Weight: 0.28, InsuranceValue: 99.90},
+"p-slim-black":    {Width: 25, Height: 3, Length: 30, Weight: 0.22, InsuranceValue: 89.90},
+"p-slim-white":    {Width: 25, Height: 3, Length: 30, Weight: 0.22, InsuranceValue: 89.90},
 }
 
 func packagingFor(productID string) ShippingPackage {
