@@ -2,6 +2,15 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import type { Product } from "../types";
 import { ProductCard } from "./ProductCard";
+import { ProductCardSkeleton } from "./ProductCardSkeleton";
+import { ProductFilters } from "./ProductFilters";
+import {
+  applyFilters,
+  deriveFilterBounds,
+  emptyFilterState,
+  pruneFiltersToBounds,
+  type ProductFilterState,
+} from "../lib/productFilters";
 import { SizeChartPanel, SizeChartLink } from "./SizeChart";
 import { WhatsApp } from "./icons";
 import { SecretUnlock } from "./SecretUnlock";
@@ -9,34 +18,64 @@ import { SECRET_PRODUCT } from "../data/fallback";
 
 type Props = {
   products: Product[];
-  onOpen: (p: Product) => void;
+  onOpen: (p: Product, preferredSize?: string) => void;
   whatsAppNumber: string;
+  /** When true the grid renders skeleton tiles instead of real cards.
+   * Used while the catalog is being fetched from the API the first time. */
+  loading?: boolean;
 };
 
-export function Products({ products, onOpen, whatsAppNumber }: Props) {
+// Normalize category strings from the API (trim whitespace, title-case)
+// so admin-created variants like "baby look" and "Baby Look" are merged.
+function normalizeCategory(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  return trimmed
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   const [secretUnlocked, setSecretUnlocked] = useState(() => {
     return localStorage.getItem("nast:secret") === "1";
   });
   const [showUnlock, setShowUnlock] = useState(false);
 
   const categories = useMemo(() => {
-    const set = new Set<string>();
-    products.forEach((p) => set.add(p.category));
-    return ["Todas", ...Array.from(set)];
+    const seen = new Set<string>();
+    products.forEach((p) => seen.add(normalizeCategory(p.category)));
+    return ["Todas", ...Array.from(seen)];
   }, [products]);
-  const [active, setActive] = useState("Todas");
+  const [activeCategory, setActiveCategory] = useState("Todas");
 
-  const filtered = useMemo(
-    () =>
-      active === "Todas"
-        ? products
-        : products.filter((p) => p.category === active),
-    [products, active],
+  const bounds = useMemo(() => deriveFilterBounds(products), [products]);
+  const [filters, setFilters] = useState<ProductFilterState>(() =>
+    emptyFilterState(),
   );
+
+  const liveFilters = useMemo(
+    () => pruneFiltersToBounds(filters, bounds),
+    [filters, bounds],
+  );
+
+  const filtered = useMemo(() => {
+    const byCategory =
+      activeCategory === "Todas"
+        ? products
+        : products.filter(
+            (p) => normalizeCategory(p.category) === activeCategory,
+          );
+    return applyFilters(byCategory, liveFilters, bounds);
+  }, [products, activeCategory, liveFilters, bounds]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
   )}`;
+
+  const handleOpen = (p: Product) => {
+    onOpen(p);
+  };
 
   function handleUnlocked() {
     localStorage.setItem("nast:secret", "1");
@@ -67,12 +106,12 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
             {categories.map((c) => (
               <motion.button
                 key={c}
-                onClick={() => setActive(c)}
+                onClick={() => setActiveCategory(c)}
                 whileHover={{ y: -1 }}
                 whileTap={{ scale: 0.96 }}
                 className="relative px-4 py-2 text-[11px] font-bold uppercase tracking-[0.3em]"
               >
-                {active === c && (
+                {activeCategory === c && (
                   <motion.span
                     layoutId="pill"
                     className="absolute inset-0 bg-[var(--color-accent)]"
@@ -80,7 +119,7 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
                   />
                 )}
                 <span
-                  className={`relative ${active === c ? "text-black" : "text-white/60 hover:text-white"}`}
+                  className={`relative ${activeCategory === c ? "text-black" : "text-white/60 hover:text-white"}`}
                 >
                   {c}
                 </span>
@@ -93,46 +132,67 @@ export function Products({ products, onOpen, whatsAppNumber }: Props) {
         </div>
       </motion.div>
 
-      <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <AnimatePresence mode="popLayout">
-            {filtered.map((p, i) => (
-              <motion.div
-                key={p.id}
-                layout
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              >
-                <ProductCard product={p} index={i} onOpen={onOpen} />
-              </motion.div>
-            ))}
+      <div className="mt-8">
+        <ProductFilters
+          bounds={bounds}
+          filters={filters}
+          onChange={setFilters}
+        />
+      </div>
 
-            {/* Card da peça secreta */}
-            {(active === "Todas") && (
-              <motion.div
-                key="secret-card"
-                layout
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              >
-                {secretUnlocked ? (
-                  <ProductCard
-                    product={SECRET_PRODUCT}
-                    index={filtered.length}
-                    onOpen={onOpen}
-                  />
-                ) : showUnlock ? (
-                  <SecretUnlock onUnlocked={handleUnlocked} />
-                ) : (
-                  <LockedCard onReveal={() => setShowUnlock(true)} />
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
+      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {loading && filtered.length === 0 ? (
+            <>
+              {Array.from({ length: 4 }).map((_, i) => (
+                <ProductCardSkeleton key={`sk-${i}`} />
+              ))}
+            </>
+          ) : (
+            <AnimatePresence mode="popLayout">
+              {filtered.map((p, i) => (
+                <motion.div
+                  key={p.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ type: "spring", stiffness: 140, damping: 20 }}
+                >
+                  <ProductCard product={p} index={i} onOpen={handleOpen} />
+                </motion.div>
+              ))}
+
+              {/* Card da peça secreta — só aparece em "Todas" */}
+              {activeCategory === "Todas" && (
+                <motion.div
+                  key="secret-card"
+                  layout
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ type: "spring", stiffness: 140, damping: 20 }}
+                >
+                  {secretUnlocked ? (
+                    <ProductCard
+                      product={SECRET_PRODUCT}
+                      index={filtered.length}
+                      onOpen={handleOpen}
+                    />
+                  ) : showUnlock ? (
+                    <SecretUnlock onUnlocked={handleUnlocked} />
+                  ) : (
+                    <LockedCard onReveal={() => setShowUnlock(true)} />
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+          {!loading && filtered.length === 0 && (
+            <div className="col-span-full border border-white/10 bg-white/5 px-6 py-10 text-center text-sm text-white/60">
+              Nenhum modelo encontrado pro filtro atual.
+            </div>
+          )}
         </div>
 
         <SizeChartPanel />
@@ -161,7 +221,6 @@ function LockedCard({ onReveal }: { onReveal: () => void }) {
       transition={{ type: "spring", stiffness: 200, damping: 22 }}
       onClick={onReveal}
     >
-      {/* Imagem bloqueada com overlay */}
       <div className="relative aspect-square w-full overflow-hidden bg-black flex items-center justify-center">
         <motion.div
           className="absolute inset-0 flex flex-col items-center justify-center gap-3"
@@ -171,8 +230,6 @@ function LockedCard({ onReveal }: { onReveal: () => void }) {
           <div className="text-5xl select-none">🔒</div>
           <div className="eyebrow text-white/40 text-center px-4">ACESSO RESTRITO</div>
         </motion.div>
-
-        {/* Scanlines effect */}
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
@@ -180,7 +237,6 @@ function LockedCard({ onReveal }: { onReveal: () => void }) {
               "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
           }}
         />
-
         <div className="absolute left-3 top-3">
           <span className="bg-red-600/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.25em] text-white backdrop-blur">
             secreto
@@ -203,7 +259,6 @@ function LockedCard({ onReveal }: { onReveal: () => void }) {
             desbloquear →
           </motion.button>
         </div>
-
         <div className="mt-auto border-t border-white/10 pt-3">
           <div className="text-sm text-white/30 font-bold uppercase tracking-widest">
             tem um código?
