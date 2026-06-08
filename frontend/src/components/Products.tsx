@@ -42,14 +42,21 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   });
   const [showUnlock, setShowUnlock] = useState(false);
 
+  // Strip the secret product from the public-facing list so it never
+  // appears twice (once in the regular grid, once via SecretUnlock).
+  const publicProducts = useMemo(
+    () => products.filter((p) => p.id !== SECRET_PRODUCT.id),
+    [products],
+  );
+
   const categories = useMemo(() => {
     const seen = new Set<string>();
-    products.forEach((p) => seen.add(normalizeCategory(p.category)));
+    publicProducts.forEach((p) => seen.add(normalizeCategory(p.category)));
     return ["Todas", ...Array.from(seen)];
   }, [products]);
   const [activeCategory, setActiveCategory] = useState("Todas");
 
-  const bounds = useMemo(() => deriveFilterBounds(products), [products]);
+  const bounds = useMemo(() => deriveFilterBounds(publicProducts), [products]);
   const [filters, setFilters] = useState<ProductFilterState>(() =>
     emptyFilterState(),
   );
@@ -62,12 +69,12 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   const filtered = useMemo(() => {
     const byCategory =
       activeCategory === "Todas"
-        ? products
-        : products.filter(
+        ? publicProducts
+        : publicProducts.filter(
             (p) => normalizeCategory(p.category) === activeCategory,
           );
     return applyFilters(byCategory, liveFilters, bounds);
-  }, [products, activeCategory, liveFilters, bounds]);
+  }, [publicProducts, activeCategory, liveFilters, bounds]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
