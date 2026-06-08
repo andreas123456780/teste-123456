@@ -231,6 +231,98 @@ func handleAdminSecret(ctx context.Context, w http.ResponseWriter, r *http.Reque
         }
 }
 
+
+// ----- Announcement banner settings -----
+
+// BannerSettings controls the dismissable announcement strip at the top
+// of every storefront page. Visible=false hides it. BgColor accepts
+// "accent", "white", or "black" (default: "accent").
+type BannerSettings struct {
+	Visible   bool   `json:"visible"`
+	Text      string `json:"text"`
+	Link      string `json:"link,omitempty"`
+	LinkLabel string `json:"linkLabel,omitempty"`
+	BgColor   string `json:"bgColor,omitempty"`
+}
+
+func defaultBanner() BannerSettings {
+	return BannerSettings{
+		Visible:   false,
+		Text:      "Frete gratis com o cupom NASTT",
+		Link:      "",
+		LinkLabel: "",
+		BgColor:   "accent",
+	}
+}
+
+func (s *settingsStore) getBanner(ctx context.Context) (BannerSettings, error) {
+	raw, err := s.get(ctx, "banner")
+	if err != nil {
+		return BannerSettings{}, err
+	}
+	out := defaultBanner()
+	if raw == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return defaultBanner(), nil
+	}
+	return out, nil
+}
+
+func (s *settingsStore) setBanner(ctx context.Context, b BannerSettings) error {
+	b = sanitizeBanner(b)
+	buf, err := json.Marshal(b)
+	if err != nil {
+		return fmt.Errorf("marshal banner: %w", err)
+	}
+	return s.set(ctx, "banner", string(buf))
+}
+
+func sanitizeBanner(b BannerSettings) BannerSettings {
+	b.Text = clampString(strings.TrimSpace(b.Text), 200)
+	b.Link = clampString(strings.TrimSpace(b.Link), 400)
+	b.LinkLabel = clampString(strings.TrimSpace(b.LinkLabel), 60)
+	b.BgColor = strings.TrimSpace(b.BgColor)
+	switch b.BgColor {
+	case "accent", "white", "black":
+	default:
+		b.BgColor = "accent"
+	}
+	if b.Link == "" {
+		b.LinkLabel = ""
+	}
+	return b
+}
+
+func handleAdminBanner(ctx context.Context, w http.ResponseWriter, r *http.Request, store *settingsStore) {
+	switch r.Method {
+	case http.MethodGet:
+		b, err := store.getBanner(ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
+	case http.MethodPut, http.MethodPost:
+		var b BannerSettings
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&b); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if err := store.setBanner(ctx, b); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "save failed"})
+			return
+		}
+		out, _ := store.getBanner(ctx)
+		writeJSON(w, http.StatusOK, out)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
 // ----- HTTP -----
 
 // handlePublicSettings exposes the safe subset of settings keyed by
