@@ -83,4 +83,4 @@ export const SECRET_PRODUCT: Product = {
 };
 
 // Código de desbloqueio da peça secreta
-export const SECRET_CODE = "NSTRED01";
+export const SECRET_CODE = "10820";
