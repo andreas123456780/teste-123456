@@ -13,6 +13,8 @@ import {
 } from "../lib/productFilters";
 import { SizeChartPanel, SizeChartLink } from "./SizeChart";
 import { WhatsApp } from "./icons";
+import { SecretUnlock } from "./SecretUnlock";
+import { SECRET_PRODUCT } from "../data/fallback";
 
 type Props = {
   products: Product[];
@@ -35,6 +37,11 @@ function normalizeCategory(raw: string): string {
 }
 
 export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
+  const [secretUnlocked, setSecretUnlocked] = useState(() => {
+    return localStorage.getItem("nast:secret") === "1";
+  });
+  const [showUnlock, setShowUnlock] = useState(false);
+
   const categories = useMemo(() => {
     const seen = new Set<string>();
     products.forEach((p) => seen.add(normalizeCategory(p.category)));
@@ -47,9 +54,6 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
     emptyFilterState(),
   );
 
-  // Drop sizes/colors the catalog no longer offers so a stale filter
-  // can't render the grid empty. priceMaxCents=null is the default
-  // ("no max"), which already adapts when bounds change.
   const liveFilters = useMemo(
     () => pruneFiltersToBounds(filters, bounds),
     [filters, bounds],
@@ -72,6 +76,12 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   const handleOpen = (p: Product) => {
     onOpen(p);
   };
+
+  function handleUnlocked() {
+    localStorage.setItem("nast:secret", "1");
+    setSecretUnlocked(true);
+    setShowUnlock(false);
+  }
 
   return (
     <section id="products" className="relative mx-auto max-w-7xl px-6 py-28">
@@ -152,6 +162,30 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
                   <ProductCard product={p} index={i} onOpen={handleOpen} />
                 </motion.div>
               ))}
+
+              {/* Card da peça secreta — só aparece em "Todas" */}
+              {activeCategory === "Todas" && (
+                <motion.div
+                  key="secret-card"
+                  layout
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ type: "spring", stiffness: 140, damping: 20 }}
+                >
+                  {secretUnlocked ? (
+                    <ProductCard
+                      product={SECRET_PRODUCT}
+                      index={filtered.length}
+                      onOpen={handleOpen}
+                    />
+                  ) : showUnlock ? (
+                    <SecretUnlock onUnlocked={handleUnlocked} />
+                  ) : (
+                    <LockedCard onReveal={() => setShowUnlock(true)} />
+                  )}
+                </motion.div>
+              )}
             </AnimatePresence>
           )}
           {!loading && filtered.length === 0 && (
@@ -176,5 +210,61 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
         Ficou com dúvida? chama no zap
       </motion.a>
     </section>
+  );
+}
+
+function LockedCard({ onReveal }: { onReveal: () => void }) {
+  return (
+    <motion.div
+      className="group relative flex flex-col border border-white/10 bg-[var(--color-bg-soft)] text-left transition-colors hover:border-white/30 cursor-pointer"
+      whileHover={{ scale: 1.01 }}
+      transition={{ type: "spring", stiffness: 200, damping: 22 }}
+      onClick={onReveal}
+    >
+      <div className="relative aspect-square w-full overflow-hidden bg-black flex items-center justify-center">
+        <motion.div
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3"
+          animate={{ opacity: [0.6, 1, 0.6] }}
+          transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+        >
+          <div className="text-5xl select-none">🔒</div>
+          <div className="eyebrow text-white/40 text-center px-4">ACESSO RESTRITO</div>
+        </motion.div>
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
+        <div className="absolute left-3 top-3">
+          <span className="bg-red-600/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.25em] text-white backdrop-blur">
+            secreto
+          </span>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="eyebrow text-white/30">???</div>
+            <div className="mt-1 text-base font-bold text-white/40 tracking-widest">
+              ██████████
+            </div>
+          </div>
+          <motion.button
+            whileHover={{ x: 2 }}
+            className="shrink-0 text-[11px] font-bold uppercase tracking-[0.3em] text-[var(--color-accent)]"
+          >
+            desbloquear →
+          </motion.button>
+        </div>
+        <div className="mt-auto border-t border-white/10 pt-3">
+          <div className="text-sm text-white/30 font-bold uppercase tracking-widest">
+            tem um código?
+          </div>
+        </div>
+      </div>
+    </motion.div>
   );
 }

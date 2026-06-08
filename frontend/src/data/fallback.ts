@@ -100,3 +100,24 @@ export const FALLBACK_PRODUCTS: Product[] = [
     stockBySize: { "Baby Look": 12 },
   },
 ];
+
+// Peça secreta — só aparece após desbloqueio com código
+export const SECRET_PRODUCT: Product = {
+  id: "p-secret-red",
+  name: "NST VERMELHA",
+  description:
+    "Peça exclusiva em vermelho. Produção limitadíssima, reservada para quem sabe onde procurar.",
+  priceCents: 12990,
+  pixPriceCents: 12341,
+  category: "Secreto",
+  image: "tee-red.jpg",
+  backImage: "tee-red.jpg",
+  colors: ["vermelho"],
+  sizes: ["P", "M", "G"],
+  tags: ["secreto", "exclusivo"],
+  stock: 5,
+  stockBySize: { P: 2, M: 2, G: 1 },
+};
+
+// Código de desbloqueio da peça secreta
+export const SECRET_CODE = "10820";
