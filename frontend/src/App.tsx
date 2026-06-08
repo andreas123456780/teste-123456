@@ -159,6 +159,7 @@ function Home() {
   // to the hard-coded catalog (offline safety net).
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [banner, setBanner] = useState<BannerSettings | null>(null);
   const [productsLoading, setProductsLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
@@ -187,6 +188,7 @@ function Home() {
   useEffect(() => {
     let cancelled = false;
     const start = Date.now();
+    api.getBanner().then(setBanner).catch(() => {});
     api
       .listProducts()
       .then((list) => {
@@ -300,6 +302,7 @@ function Home() {
 
   return (
     <div className="noise relative min-h-full">
+      <AnnouncementBanner settings={banner} />
       <ScrollProgress />
       <Header cartCount={cartCount} onOpenCart={() => setCartOpen(true)} />
 
