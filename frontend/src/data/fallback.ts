@@ -69,7 +69,7 @@ export const FALLBACK_PRODUCTS: Product[] = [
   },
   {
     id: "p-bb-look-black",
-    name: "BABY LOOK NAST TEE",
+    name: "BABY LOOK NAST TEE PRETA",
     description:
       'Baby look preta em algodão 30.1 penteado com print cursivo "Just be You" frontal em branco. Corte ajustado feminino, gola reforçada e etiqueta tecida NAST.',
     priceCents: 7990,
@@ -85,7 +85,7 @@ export const FALLBACK_PRODUCTS: Product[] = [
   },
   {
     id: "p-bb-look-white",
-    name: "BABY LOOK NAST TEE",
+    name: "BABY LOOK NAST TEE BRANCA",
     description:
       'Baby look branca em algodão 30.1 penteado com print cursivo "Just be You" frontal em preto. Corte ajustado feminino, gola reforçada e etiqueta tecida NAST.',
     priceCents: 7990,
