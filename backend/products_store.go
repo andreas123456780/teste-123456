@@ -311,14 +311,39 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// seedProducts upserts the in-code catalog into the DB on every startup.
-// This ensures that image paths, descriptions, prices, and new products
-// from code deployments are always reflected in the database. Products
-// created via the admin panel (with different IDs) are left untouched.
+// seedInsert inserts a product only if no row with that id exists yet.
+// Unlike upsert it does NOT overwrite an existing row, so admin edits
+// and deliberate admin deletes survive a backend restart / redeploy.
+func (s *productsStore) seedInsert(ctx context.Context, p *Product, hidden bool, sortOrder int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	colors, _ := json.Marshal(stringsOrEmpty(p.Colors))
+	sizes, _ := json.Marshal(stringsOrEmpty(p.Sizes))
+	tags, _ := json.Marshal(stringsOrEmpty(p.Tags))
+	stockBySize, _ := json.Marshal(normalizeStockBySize(p.StockBySize, p.Sizes))
+	const q = `INSERT INTO products
+(id, name, description, price_cents, pix_price_cents, category, image, back_image,
+ colors_json, sizes_json, tags_json, stock, stock_by_size, transparent_image, hidden, sort_order, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO NOTHING`
+	_, err := s.db.ExecContext(ctx, rb(q),
+		p.ID, p.Name, p.Description, p.PriceCents, p.PixPriceCents, p.Category,
+		p.Image, p.BackImage, string(colors), string(sizes), string(tags),
+		p.Stock, string(stockBySize), boolToInt(p.TransparentImage), boolToInt(hidden), sortOrder, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("seed product: %w", err)
+	}
+	return nil
+}
+
+// seedProducts inserts the in-code catalog into the DB on first run only.
+// Products are skipped when a row with the same id already exists, so
+// admin edits and deliberate deletes survive restarts and redeployments.
+// To force a re-seed of a catalog product, delete it from the DB first.
 func seedProducts(ctx context.Context, s *productsStore, seed []Product) error {
 	for i, p := range seed {
 		pp := p
-		if err := s.upsert(ctx, &pp, false, i); err != nil {
+		if err := s.seedInsert(ctx, &pp, false, i); err != nil {
 			return err
 		}
 	}
