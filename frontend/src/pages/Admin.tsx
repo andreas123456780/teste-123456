@@ -17,6 +17,7 @@ import {
   type AdminProductPayload,
   type AdminStats,
   type CountdownSettings,
+  type SecretSettings,
 } from "../api";
 import type { Coupon, Product } from "../types";
 
@@ -1516,7 +1517,9 @@ function ProductsAdmin({ token }: { token: string }) {
             </tr>
           </thead>
           <tbody>
-            {items.map((p) => (
+            {items
+              .filter((p, i, arr) => arr.findIndex((x) => x.id === p.id) === i)
+              .map((p) => (
               <tr key={p.id} className="border-b">
                 <td className="py-2 pr-3 font-mono text-xs">{p.id}</td>
                 <td className="py-2 pr-3">{p.name}</td>
@@ -2144,8 +2147,131 @@ function CouponEditForm({
 function SettingsAdmin({ token }: { token: string }) {
   return (
     <div className="space-y-6">
+      <SecretAdmin token={token} />
       <CountdownAdmin token={token} />
     </div>
+  );
+}
+
+const DEFAULT_SECRET: SecretSettings = { locked: true, code: "10820" };
+
+function SecretAdmin({ token }: { token: string }) {
+  const [settings, setSettings] = useState<SecretSettings | null>(null);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    adminSettingsApi
+      .getSecret(token)
+      .then((data) => {
+        if (!cancelled) setSettings(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setErr(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const update = (patch: Partial<SecretSettings>) =>
+    setSettings((prev) => ({ ...(prev ?? DEFAULT_SECRET), ...patch }));
+
+  const save = async () => {
+    if (!settings) return;
+    setErr("");
+    setSaving(true);
+    try {
+      const saved = await adminSettingsApi.saveSecret(token, settings);
+      setSettings(saved);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings && !err) {
+    return (
+      <div className="rounded border border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+        Carregando…
+      </div>
+    );
+  }
+
+  const value = settings ?? DEFAULT_SECRET;
+  return (
+    <section className="rounded border border-neutral-200 bg-white p-6">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Peça Secreta — NST Vermelha</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            Controla se o produto secreto exige código para ser revelado e qual
+            é esse código.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={value.locked}
+            onChange={(e) => update({ locked: e.target.checked })}
+            className="h-4 w-4"
+          />
+          <span className="font-medium">Bloqueado (exige código)</span>
+        </label>
+      </header>
+
+      {err && (
+        <div className="mt-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {err}
+        </div>
+      )}
+
+      <div className="mt-6 space-y-4">
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-neutral-700">
+            Código de desbloqueio
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={value.code}
+              onChange={(e) => update({ code: e.target.value.toUpperCase() })}
+              placeholder="ex: 10820"
+              className="w-48 rounded border border-neutral-300 px-3 py-2 font-mono text-sm uppercase tracking-widest"
+              disabled={!value.locked}
+            />
+            {!value.locked && (
+              <span className="self-center text-xs text-neutral-400">
+                (não necessário enquanto desbloqueado)
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-neutral-400">
+            Maiúsculas/minúsculas são ignoradas na comparação.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-6 flex items-center justify-end gap-4">
+        {savedAt && (
+          <span className="text-xs text-green-600">
+            Salvo {new Date(savedAt).toLocaleTimeString("pt-BR")}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="rounded bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+        >
+          {saving ? "Salvando…" : "Salvar"}
+        </button>
+      </div>
+    </section>
   );
 }
 

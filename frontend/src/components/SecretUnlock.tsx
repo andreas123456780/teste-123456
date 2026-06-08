@@ -1,24 +1,47 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
-import { SECRET_CODE } from "../data/fallback";
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import type { SecretSettings } from "../api";
 
 type Props = {
   onUnlocked: () => void;
 };
 
 export function SecretUnlock({ onUnlocked }: Props) {
+  const [settings, setSettings] = useState<SecretSettings | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [shake, setShake] = useState(false);
 
+  useEffect(() => {
+    api
+      .getSecret()
+      .then((s) => {
+        setSettings(s);
+        if (!s.locked) onUnlocked();
+      })
+      .catch(() => {
+        setSettings({ locked: true, code: "10820" });
+      });
+  }, [onUnlocked]);
+
   function tryUnlock() {
-    if (code.trim().toUpperCase() === SECRET_CODE) {
+    if (!settings) return;
+    if (code.trim().toUpperCase() === settings.code.toUpperCase()) {
       onUnlocked();
     } else {
       setError("Código inválido. Tente novamente.");
       setShake(true);
       setTimeout(() => setShake(false), 500);
     }
+  }
+
+  if (!settings) {
+    return (
+      <div className="flex items-center justify-center border border-white/10 bg-[var(--color-bg-soft)] p-12">
+        <div className="text-sm text-white/40">…</div>
+      </div>
+    );
   }
 
   return (

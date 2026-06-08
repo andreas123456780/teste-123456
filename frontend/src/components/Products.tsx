@@ -60,10 +60,13 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   );
 
   const filtered = useMemo(() => {
+    // Filter out the secret product (p-secret-red) from the regular grid —
+    // it's rendered separately as the locked/unlocked secret card below.
+    const withoutSecret = products.filter((p) => p.id !== "p-secret-red");
     const byCategory =
       activeCategory === "Todas"
-        ? products
-        : products.filter(
+        ? withoutSecret
+        : withoutSecret.filter(
             (p) => normalizeCategory(p.category) === activeCategory,
           );
     return applyFilters(byCategory, liveFilters, bounds);
