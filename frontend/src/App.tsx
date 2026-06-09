@@ -163,6 +163,7 @@ function Home() {
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<BannerSettings | null>(null);
   const [secretSettings, setSecretSettings] = useState<SecretSettings | null>(null);
+  const [secretProduct, setSecretProduct] = useState<Product | null>(null);
   const [productsLoading, setProductsLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
@@ -192,7 +193,12 @@ function Home() {
     let cancelled = false;
     const start = Date.now();
     api.getBanner().then(setBanner).catch(() => {});
-    api.getSecret().then(setSecretSettings).catch(() => {});
+    api.getSecret().then((s) => {
+      setSecretSettings(s);
+      if (s.productId) {
+        api.getProduct(s.productId).then(setSecretProduct).catch(() => {});
+      }
+    }).catch(() => {});
     api
       .listProducts()
       .then((list) => {
@@ -320,6 +326,7 @@ function Home() {
           whatsAppNumber={WHATSAPP_NUMBER}
           loading={productsLoading}
           secretProductId={secretSettings?.productId}
+          secretProduct={secretProduct ?? undefined}
         />
         <Story />
         <InstagramFeed handle={INSTAGRAM_HANDLE} />
