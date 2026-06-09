@@ -23,6 +23,9 @@ type Props = {
   /** When true the grid renders skeleton tiles instead of real cards.
    * Used while the catalog is being fetched from the API the first time. */
   loading?: boolean;
+  /** ID of the product currently set as "secret" in admin settings.
+   *  Falls back to "p-secret-red" so existing stores keep working. */
+  secretProductId?: string;
 };
 
 // Normalize category strings from the API (trim whitespace, title-case)
@@ -36,7 +39,9 @@ function normalizeCategory(raw: string): string {
     .join(" ");
 }
 
-export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
+export function Products({ products, onOpen, whatsAppNumber, loading, secretProductId }: Props) {
+  const resolvedSecretId = secretProductId || "p-secret-red";
+
   const [secretUnlocked, setSecretUnlocked] = useState(() => {
     return localStorage.getItem("nast:secret") === "1";
   });
@@ -62,7 +67,7 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
   const filtered = useMemo(() => {
     // Filter out the secret product (p-secret-red) from the regular grid —
     // it's rendered separately as the locked/unlocked secret card below.
-    const withoutSecret = products.filter((p) => p.id !== "p-secret-red");
+    const withoutSecret = products.filter((p) => p.id !== resolvedSecretId);
     const byCategory =
       activeCategory === "Todas"
         ? withoutSecret
@@ -178,7 +183,7 @@ export function Products({ products, onOpen, whatsAppNumber, loading }: Props) {
                 >
                   {secretUnlocked ? (
                     <ProductCard
-                      product={SECRET_PRODUCT}
+                      product={products.find((p) => p.id === resolvedSecretId) ?? SECRET_PRODUCT}
                       index={filtered.length}
                       onOpen={handleOpen}
                     />
