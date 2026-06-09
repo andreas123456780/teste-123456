@@ -21,6 +21,7 @@ import {
   type SecretSettings,
 } from "../api";
 import type { Coupon, Product } from "../types";
+import { CountdownView } from "../components/Countdown";
 
 // Admin is an intentionally plain, no-deps management screen. Operators
 // authenticate either with username+password (preferred, when the
@@ -2618,6 +2619,22 @@ function CountdownAdmin({ token }: { token: string }) {
             Sem link, o botão não aparece.
           </p>
         </Field>
+      </div>
+
+      {/* Live preview — updates in real time as you edit */}
+      <div className="mt-8 overflow-hidden rounded border border-neutral-200">
+        <div className="border-b border-neutral-200 bg-neutral-50 px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+            Preview ao vivo
+          </p>
+        </div>
+        <CountdownView
+          settings={{
+            ...value,
+            visible: true,
+            targetAt: localDateTimeToRfc3339(value.targetAt),
+          }}
+        />
       </div>
 
       <div className="mt-6 flex items-center gap-3">
