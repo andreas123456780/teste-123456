@@ -26,6 +26,9 @@ type Props = {
   /** ID of the product currently set as "secret" in admin settings.
    *  Falls back to "p-secret-red" so existing stores keep working. */
   secretProductId?: string;
+  /** Pre-fetched product object for the secret card. Passed from App so the card
+   *  works even when the product has hidden=true and is absent from the public catalog. */
+  secretProduct?: Product;
 };
 
 // Normalize category strings from the API (trim whitespace, title-case)
@@ -39,7 +42,7 @@ function normalizeCategory(raw: string): string {
     .join(" ");
 }
 
-export function Products({ products, onOpen, whatsAppNumber, loading, secretProductId }: Props) {
+export function Products({ products, onOpen, whatsAppNumber, loading, secretProductId, secretProduct }: Props) {
   const resolvedSecretId = secretProductId || "p-secret-red";
 
   // Remove the secret product FIRST so it never leaks into categories or filters.
@@ -186,7 +189,7 @@ export function Products({ products, onOpen, whatsAppNumber, loading, secretProd
                 >
                   {secretUnlocked ? (
                     <ProductCard
-                      product={products.find((p) => p.id === resolvedSecretId) ?? SECRET_PRODUCT}
+                      product={secretProduct ?? products.find((p) => p.id === resolvedSecretId) ?? SECRET_PRODUCT}
                       index={filtered.length}
                       onOpen={handleOpen}
                     />
