@@ -2320,13 +2320,18 @@ function BannerAdmin({ token }: { token: string }) {
   );
 }
 
-const DEFAULT_SECRET: SecretSettings = { locked: true, code: "10820" };
+const DEFAULT_SECRET: SecretSettings = { locked: true, code: "10820", productId: "" };
 
 function SecretAdmin({ token }: { token: string }) {
   const [settings, setSettings] = useState<SecretSettings | null>(null);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [products, setProducts] = useState<AdminProductPayload[]>([]);
+
+  useEffect(() => {
+    adminApi.list(token).then(setProducts).catch(() => {});
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2374,10 +2379,9 @@ function SecretAdmin({ token }: { token: string }) {
     <section className="rounded border border-neutral-200 bg-white p-6">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Peça Secreta — NST Vermelha</h2>
+          <h2 className="text-lg font-semibold">Peça Secreta</h2>
           <p className="mt-1 text-xs text-neutral-500">
-            Controla se o produto secreto exige código para ser revelado e qual
-            é esse código.
+            Escolha qual produto fica escondido e defina o código de desbloqueio.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -2398,6 +2402,27 @@ function SecretAdmin({ token }: { token: string }) {
       )}
 
       <div className="mt-6 space-y-4">
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-neutral-700">
+            Produto secreto
+          </label>
+          <select
+            value={value.productId ?? ""}
+            onChange={(e) => update({ productId: e.target.value })}
+            className="rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          >
+            <option value="">— selecione o produto —</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-neutral-400">
+            Esse produto desaparece da grade normal e fica oculto até o cliente digitar o código.
+          </p>
+        </div>
+
         <div className="flex flex-col gap-1">
           <label className="text-sm font-medium text-neutral-700">
             Código de desbloqueio
