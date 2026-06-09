@@ -168,8 +168,9 @@ func clampString(s string, max int) string {
 // Locked=true means the product requires a code to reveal.
 // Code is the unlock passphrase (compared case-insensitively by the client).
 type SecretSettings struct {
-        Locked bool   `json:"locked"`
-        Code   string `json:"code"`
+        Locked     bool   `json:"locked"`
+        Code       string `json:"code"`
+        ProductID  string `json:"productId,omitempty"`
 }
 
 func defaultSecret() SecretSettings {
