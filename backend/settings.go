@@ -38,6 +38,7 @@ func newSettingsStore(db *sql.DB) *settingsStore {
 var publicSettingKeys = map[string]bool{
         "countdown": true,
         "secret":    true,
+        "banner":    true,
 }
 
 // CountdownSettings is the structured payload behind the "countdown"
@@ -372,6 +373,8 @@ func loadPublicSetting(ctx context.Context, store *settingsStore, key string) (a
                 return store.getCountdown(ctx)
         case "secret":
                 return store.getSecret(ctx)
+        case "banner":
+                return store.getBanner(ctx)
         default:
                 return nil, fmt.Errorf("unknown public key %q", key)
         }
@@ -395,6 +398,8 @@ func handleAdminSettings(store *settingsStore) http.HandlerFunc {
                         handleAdminCountdown(ctx, w, r, store)
                 case "secret":
                         handleAdminSecret(ctx, w, r, store)
+                case "banner":
+                        handleAdminBanner(ctx, w, r, store)
                 default:
                         writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown setting"})
                 }
