@@ -42,6 +42,12 @@ function normalizeCategory(raw: string): string {
 export function Products({ products, onOpen, whatsAppNumber, loading, secretProductId }: Props) {
   const resolvedSecretId = secretProductId || "p-secret-red";
 
+  // Remove the secret product FIRST so it never leaks into categories or filters.
+  const publicProducts = useMemo(
+    () => products.filter((p) => p.id !== resolvedSecretId),
+    [products, resolvedSecretId],
+  );
+
   const [secretUnlocked, setSecretUnlocked] = useState(() => {
     return localStorage.getItem("nast:secret") === "1";
   });
@@ -49,12 +55,12 @@ export function Products({ products, onOpen, whatsAppNumber, loading, secretProd
 
   const categories = useMemo(() => {
     const seen = new Set<string>();
-    products.forEach((p) => seen.add(normalizeCategory(p.category)));
+    publicProducts.forEach((p) => seen.add(normalizeCategory(p.category)));
     return ["Todas", ...Array.from(seen)];
-  }, [products]);
+  }, [publicProducts]);
   const [activeCategory, setActiveCategory] = useState("Todas");
 
-  const bounds = useMemo(() => deriveFilterBounds(products), [products]);
+  const bounds = useMemo(() => deriveFilterBounds(publicProducts), [publicProducts]);
   const [filters, setFilters] = useState<ProductFilterState>(() =>
     emptyFilterState(),
   );
@@ -65,17 +71,14 @@ export function Products({ products, onOpen, whatsAppNumber, loading, secretProd
   );
 
   const filtered = useMemo(() => {
-    // Filter out the secret product (p-secret-red) from the regular grid —
-    // it's rendered separately as the locked/unlocked secret card below.
-    const withoutSecret = products.filter((p) => p.id !== resolvedSecretId);
     const byCategory =
       activeCategory === "Todas"
-        ? withoutSecret
-        : withoutSecret.filter(
+        ? publicProducts
+        : publicProducts.filter(
             (p) => normalizeCategory(p.category) === activeCategory,
           );
     return applyFilters(byCategory, liveFilters, bounds);
-  }, [products, activeCategory, liveFilters, bounds]);
+  }, [publicProducts, activeCategory, liveFilters, bounds]);
 
   const waHref = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(
     "Oi! Queria falar com a NAST sobre as peças.",
