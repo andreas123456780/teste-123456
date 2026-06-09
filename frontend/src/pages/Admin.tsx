@@ -2451,7 +2451,7 @@ function SecretAdmin({ token }: { token: string }) {
       <div className="mt-6 flex items-center justify-end gap-4">
         {savedAt && (
           <span className="text-xs text-green-600">
-            Salvo {new Date(savedAt).toLocaleTimeString("pt-BR")}
+            Salvo {new Date(savedAt).toLocaleTimeString("pt-BR")} — recarregue a loja para ver
           </span>
         )}
         <button
