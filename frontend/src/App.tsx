@@ -160,6 +160,7 @@ function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<BannerSettings | null>(null);
+  const [secretSettings, setSecretSettings] = useState<SecretSettings | null>(null);
   const [productsLoading, setProductsLoading] = useState(true);
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
   const [cart, setCart] = useState<CartItem[]>(() => loadCart());
@@ -189,6 +190,7 @@ function Home() {
     let cancelled = false;
     const start = Date.now();
     api.getBanner().then(setBanner).catch(() => {});
+    api.getSecret().then(setSecretSettings).catch(() => {});
     api
       .listProducts()
       .then((list) => {
@@ -315,6 +317,7 @@ function Home() {
           onOpen={openModal}
           whatsAppNumber={WHATSAPP_NUMBER}
           loading={productsLoading}
+          secretProductId={secretSettings?.productId}
         />
         <Story />
         <InstagramFeed handle={INSTAGRAM_HANDLE} />
