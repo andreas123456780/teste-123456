@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import type { BannerSettings, SecretSettings } from "./api";
+import { AnnouncementBanner } from "./components/AnnouncementBanner";
 import { FALLBACK_PRODUCTS } from "./data/fallback";
 import type { CartItem, Product } from "./types";
 
