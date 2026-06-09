@@ -67,6 +67,7 @@ export type BannerSettings = {
 export type SecretSettings = {
   locked: boolean;
   code: string;
+  productId?: string;
 };
 
 export const api = {
