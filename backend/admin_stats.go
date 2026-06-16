@@ -104,7 +104,7 @@ func collectAdminStats(ctx context.Context, db *sql.DB) (*adminStats, error) {
 	if err != nil {
 		return nil, err
 	}
-	daily, err := queryRevenueByDay(ctx, db, 30)
+	daily, err := queryRevenueByDay(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -201,25 +201,23 @@ func queryTopProducts(ctx context.Context, db *sql.DB, limit int) ([]adminTopPro
 	return out, rows.Err()
 }
 
-func queryRevenueByDay(ctx context.Context, db *sql.DB, days int) ([]adminDailyRevenue, error) {
+func queryRevenueByDay(ctx context.Context, db *sql.DB) ([]adminDailyRevenue, error) {
 	// Both dialects serialize timestamps as RFC3339-ish strings that
 	// begin with YYYY-MM-DD. substr(…, 1, 10) is cheaper and more
 	// portable than DATE() — the modernc sqlite driver emits a 'T'
 	// separator that DATE() chokes on.
-	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	rows, err := db.QueryContext(ctx, rb(`
 		SELECT substr(CAST(created_at AS TEXT), 1, 10) AS day,
 			COALESCE(SUM(amount_cents), 0), COUNT(*)
 		FROM orders
 		WHERE status IN ('paid', 'shipped')
-			AND created_at >= ?
 		GROUP BY day
-		ORDER BY day ASC`), since)
+		ORDER BY day ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]adminDailyRevenue, 0, days)
+	out := make([]adminDailyRevenue, 0, 400)
 	for rows.Next() {
 		var d adminDailyRevenue
 		if err := rows.Scan(&d.Day, &d.GrossCents, &d.OrderCount); err != nil {
