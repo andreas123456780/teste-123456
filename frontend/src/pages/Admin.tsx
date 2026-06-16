@@ -520,96 +520,107 @@ function DashboardAdmin({ token }: { token: string }) {
   }
   if (!stats) return <p className="text-sm text-neutral-500">Carregando…</p>;
 
+  const paidPct =
+    stats.orders.total > 0
+      ? Math.round((stats.orders.paid / stats.orders.total) * 100)
+      : 0;
+
   return (
-    <section className="space-y-8">
+    <section className="space-y-5">
+      {/* Revenue KPIs */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Kpi label="Pedidos totais" value={stats.orders.total.toString()} />
-        <Kpi label="Pagos" value={stats.orders.paid.toString()} />
-        <Kpi label="Pendentes" value={stats.orders.pendingPayment.toString()} />
-        <Kpi label="Cancelados" value={stats.orders.canceled.toString()} />
-        <Kpi label="Receita bruta" value={moneyBR(stats.revenue.grossCents)} />
         <Kpi
-          label="Frete arrecadado"
-          value={moneyBR(stats.revenue.shippingCents)}
-        />
-        <Kpi
-          label="Descontos aplicados"
-          value={moneyBR(stats.revenue.discountCents)}
+          label="Receita bruta"
+          value={moneyBR(stats.revenue.grossCents)}
+          sub={`${stats.revenue.paidOrderCount} pedido${stats.revenue.paidOrderCount !== 1 ? "s" : ""} pago${stats.revenue.paidOrderCount !== 1 ? "s" : ""}`}
+          icon={<IcoTrend />}
         />
         <Kpi
           label="Ticket médio"
           value={moneyBR(stats.revenue.avgTicketCents)}
+          color="blue"
+          icon={<IcoTag />}
+        />
+        <Kpi
+          label="Frete arrecadado"
+          value={moneyBR(stats.revenue.shippingCents)}
+          icon={<IcoTruck />}
+        />
+        <Kpi
+          label="Descontos"
+          value={moneyBR(stats.revenue.discountCents)}
+          color="amber"
+          icon={<IcoPercent />}
         />
       </div>
 
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">Mais vendidos</h2>
-        {stats.topProducts.length === 0 ? (
-          <p className="text-sm text-neutral-500">Nenhuma venda ainda.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-neutral-200 text-left">
-                <th className="py-2">Produto</th>
-                <th className="py-2">Qtd vendida</th>
-                <th className="py-2">Receita</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.topProducts.map((p) => (
-                <tr key={p.productId} className="border-b border-neutral-100">
-                  <td className="py-2">{p.productName || p.productId}</td>
-                  <td className="py-2">{p.quantity}</td>
-                  <td className="py-2">{moneyBR(p.grossCents)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      {/* Orders KPIs */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Kpi
+          label="Pedidos totais"
+          value={stats.orders.total.toString()}
+          icon={<IcoBag />}
+        />
+        <Kpi
+          label="Pagos"
+          value={stats.orders.paid.toString()}
+          color="green"
+          sub={paidPct > 0 ? `${paidPct}% do total` : undefined}
+          icon={<IcoCheck />}
+        />
+        <Kpi
+          label="Pendentes"
+          value={stats.orders.pendingPayment.toString()}
+          color="amber"
+          icon={<IcoClock />}
+        />
+        <Kpi
+          label="Cancelados"
+          value={stats.orders.canceled.toString()}
+          color={stats.orders.canceled > 0 ? "red" : "neutral"}
+          icon={<IcoXmark />}
+        />
       </div>
 
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">Receita por dia (últimos 30d)</h2>
-        {stats.revenueByDay.length === 0 ? (
-          <p className="text-sm text-neutral-500">Sem receita no período.</p>
-        ) : (
-          <DailyRevenueChart data={stats.revenueByDay} />
-        )}
+      {/* Chart + Top products side by side */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+            Receita por dia (30d)
+          </h2>
+          {stats.revenueByDay.length === 0 ? (
+            <p className="text-sm text-neutral-400">Sem receita no período.</p>
+          ) : (
+            <DailyRevenueChart data={stats.revenueByDay} />
+          )}
+        </div>
+        <div className="rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+            Mais vendidos
+          </h2>
+          {stats.topProducts.length === 0 ? (
+            <p className="text-sm text-neutral-400">Nenhuma venda ainda.</p>
+          ) : (
+            <TopProductsChart data={stats.topProducts} />
+          )}
+        </div>
       </div>
 
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">Últimos pedidos</h2>
+      {/* Recent orders */}
+      <div className="rounded-lg border border-neutral-200 bg-white">
+        <div className="border-b border-neutral-100 px-4 py-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+            Últimos pedidos
+          </h2>
+        </div>
         {stats.recentOrders.length === 0 ? (
-          <p className="text-sm text-neutral-500">Nenhum pedido.</p>
+          <p className="px-4 py-3 text-sm text-neutral-400">Nenhum pedido.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-neutral-200 text-left">
-                <th className="py-2">ID</th>
-                <th className="py-2">Cliente</th>
-                <th className="py-2">Método</th>
-                <th className="py-2">Status</th>
-                <th className="py-2">Valor</th>
-                <th className="py-2">Data</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.recentOrders.map((o) => (
-                <tr key={o.id} className="border-b border-neutral-100">
-                  <td className="py-2 font-mono text-xs">{o.id.slice(0, 10)}</td>
-                  <td className="py-2">{o.customerName}</td>
-                  <td className="py-2">{o.paymentMethod}</td>
-                  <td className="py-2">
-                    <StatusBadge status={o.status} />
-                  </td>
-                  <td className="py-2">{moneyBR(o.amountCents)}</td>
-                  <td className="py-2 text-neutral-500">
-                    {new Date(o.createdAt).toLocaleString("pt-BR")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="divide-y divide-neutral-100">
+            {stats.recentOrders.map((o) => (
+              <RecentOrderRow key={o.id} order={o} />
+            ))}
+          </div>
         )}
       </div>
 
@@ -627,27 +638,70 @@ function DashboardAdmin({ token }: { token: string }) {
   );
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
+type KpiColor = "neutral" | "green" | "amber" | "red" | "blue";
+
+function Kpi({
+  label,
+  value,
+  sub,
+  color = "neutral",
+  icon,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  color?: KpiColor;
+  icon?: ReactNode;
+}) {
+  const bg: Record<KpiColor, string> = {
+    neutral: "border-neutral-200 bg-white",
+    green: "border-green-200 bg-green-50",
+    amber: "border-amber-200 bg-amber-50",
+    red: "border-red-200 bg-red-50",
+    blue: "border-blue-200 bg-blue-50",
+  };
+  const ic: Record<KpiColor, string> = {
+    neutral: "text-neutral-400",
+    green: "text-green-500",
+    amber: "text-amber-500",
+    red: "text-red-400",
+    blue: "text-blue-500",
+  };
+  const sb: Record<KpiColor, string> = {
+    neutral: "text-neutral-400",
+    green: "text-green-600",
+    amber: "text-amber-600",
+    red: "text-red-500",
+    blue: "text-blue-600",
+  };
   return (
-    <div className="rounded border border-neutral-200 p-3">
-      <p className="text-xs uppercase tracking-wide text-neutral-500">{label}</p>
-      <p className="mt-1 text-xl font-semibold">{value}</p>
+    <div className={`rounded-lg border p-4 ${bg[color]}`}>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+          {label}
+        </p>
+        {icon && <span className={`mt-0.5 ${ic[color]}`}>{icon}</span>}
+      </div>
+      <p className="mt-2 text-2xl font-black tracking-tight text-neutral-900">
+        {value}
+      </p>
+      {sub && <p className={`mt-1 text-xs ${sb[color]}`}>{sub}</p>}
     </div>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    paid: "bg-green-100 text-green-800",
-    awaiting_shipment: "bg-amber-100 text-amber-800",
-    shipped: "bg-blue-100 text-blue-800",
-    pending_payment: "bg-yellow-100 text-yellow-800",
-    failed: "bg-red-100 text-red-800",
-    canceled: "bg-neutral-200 text-neutral-700",
+  const map: Record<string, { cls: string; label: string }> = {
+    paid: { cls: "bg-green-100 text-green-800", label: "Pago" },
+    awaiting_shipment: { cls: "bg-amber-100 text-amber-800", label: "Pronto p/ envio" },
+    shipped: { cls: "bg-blue-100 text-blue-800", label: "Enviado" },
+    pending_payment: { cls: "bg-yellow-100 text-yellow-800", label: "Aguardando pag." },
+    failed: { cls: "bg-red-100 text-red-800", label: "Falhou" },
+    canceled: { cls: "bg-neutral-200 text-neutral-700", label: "Cancelado" },
   };
-  const cls = map[status] ?? "bg-neutral-100 text-neutral-700";
+  const m = map[status] ?? { cls: "bg-neutral-100 text-neutral-700", label: status };
   return (
-    <span className={`rounded px-2 py-0.5 text-xs ${cls}`}>{status}</span>
+    <span className={`rounded px-2 py-0.5 text-xs font-medium ${m.cls}`}>{m.label}</span>
   );
 }
 
@@ -657,27 +711,184 @@ function DailyRevenueChart({
   data: { day: string; grossCents: number; orderCount: number }[];
 }) {
   const max = Math.max(1, ...data.map((d) => d.grossCents));
+  const total = data.reduce((acc, d) => acc + d.grossCents, 0);
   return (
-    <div className="flex items-end gap-1 overflow-x-auto" style={{ height: 120 }}>
-      {data.map((d) => {
-        const h = Math.max(2, Math.round((d.grossCents / max) * 100));
-        return (
-          <div
-            key={d.day}
-            className="flex min-w-[18px] flex-col items-center"
-            title={`${d.day}: ${moneyBR(d.grossCents)} (${d.orderCount} pedidos)`}
-          >
+    <div>
+      <p className="mb-3 text-xs text-neutral-400">
+        Total:{" "}
+        <span className="font-semibold text-neutral-700">{moneyBR(total)}</span>
+      </p>
+      <div className="flex items-end gap-0.5" style={{ height: 120 }}>
+        {data.map((d) => {
+          const h = Math.max(4, Math.round((d.grossCents / max) * 100));
+          return (
             <div
-              className="w-full rounded-sm bg-black"
-              style={{ height: `${h}%` }}
-            />
-            <span className="mt-1 text-[10px] text-neutral-400">
-              {d.day.slice(5)}
+              key={d.day}
+              className="group relative flex flex-1 flex-col items-center justify-end"
+              style={{ height: "100%" }}
+            >
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded bg-neutral-900 px-2 py-1 text-[10px] text-white group-hover:block">
+                {moneyBR(d.grossCents)}
+                <br />
+                {d.orderCount} pedido{d.orderCount !== 1 ? "s" : ""}
+              </div>
+              <div
+                className="w-full rounded-t-sm bg-black transition-all"
+                style={{ height: `${h}%` }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1 flex gap-0.5">
+        {data.map((d, i) => (
+          <div key={d.day} className="flex-1 text-center">
+            {(i % 7 === 0 || i === data.length - 1) && (
+              <span className="text-[9px] text-neutral-400">{d.day.slice(5)}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Top-products horizontal bar chart — replaces the plain table.
+function TopProductsChart({
+  data,
+}: {
+  data: { productId: string; productName: string; quantity: number; grossCents: number }[];
+}) {
+  const max = Math.max(1, ...data.map((p) => p.grossCents));
+  return (
+    <div className="space-y-3">
+      {data.map((p, i) => (
+        <div key={p.productId}>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1.5 text-sm">
+              <span className="shrink-0 text-xs font-bold text-neutral-300">
+                #{i + 1}
+              </span>
+              <span className="truncate">{p.productName || p.productId}</span>
+            </span>
+            <span className="shrink-0 text-xs text-neutral-500">
+              {moneyBR(p.grossCents)} · {p.quantity} un
             </span>
           </div>
-        );
-      })}
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
+            <div
+              className="h-1.5 rounded-full bg-black"
+              style={{ width: `${Math.max(4, (p.grossCents / max) * 100)}%` }}
+            />
+          </div>
+        </div>
+      ))}
     </div>
+  );
+}
+
+// Recent-order row — avatar initials + name + status + amount.
+function RecentOrderRow({
+  order,
+}: {
+  order: {
+    id: string;
+    status: string;
+    paymentMethod: string;
+    amountCents: number;
+    customerName: string;
+    createdAt: string;
+  };
+}) {
+  const initials = order.customerName
+    .split(" ")
+    .slice(0, 2)
+    .map((s) => s[0] ?? "")
+    .join("")
+    .toUpperCase();
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-bold text-neutral-600">
+        {initials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-medium">{order.customerName}</span>
+          <StatusBadge status={order.status} />
+        </div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-neutral-400">
+          <span>{order.paymentMethod === "pix" ? "PIX" : "Cartão"}</span>
+          <span>·</span>
+          <span>
+            {new Date(order.createdAt).toLocaleDateString("pt-BR", {
+              day: "2-digit",
+              month: "2-digit",
+            })}
+          </span>
+        </div>
+      </div>
+      <span className="shrink-0 text-sm font-semibold">
+        {moneyBR(order.amountCents)}
+      </span>
+    </div>
+  );
+}
+
+// Inline icon set — no external dep needed.
+function IcoTrend() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" />
+    </svg>
+  );
+}
+function IcoTag() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
+  );
+}
+function IcoTruck() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" />
+    </svg>
+  );
+}
+function IcoPercent() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="19" y1="5" x2="5" y2="19" /><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" />
+    </svg>
+  );
+}
+function IcoBag() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" />
+    </svg>
+  );
+}
+function IcoCheck() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+function IcoClock() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+function IcoXmark() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
   );
 }
 
