@@ -591,7 +591,7 @@ function DashboardAdmin({ token }: { token: string }) {
           {stats.revenueByDay.length === 0 ? (
             <p className="text-sm text-neutral-400">Sem receita no período.</p>
           ) : (
-            <DailyRevenueChart data={stats.revenueByDay} />
+            <DailyRevenueChart data={stats.revenueByDay} allTimeCents={stats.revenue.grossCents} />
           )}
         </div>
         <div className="rounded-lg border border-neutral-200 bg-white p-4">
@@ -705,50 +705,143 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+const PT_MONTHS = [
+  "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+  "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+];
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  const idx = parseInt(m, 10) - 1;
+  const shortYear = y.slice(2);
+  return `${PT_MONTHS[idx] ?? m}/${shortYear}`;
+}
+
 function DailyRevenueChart({
   data,
+  allTimeCents,
 }: {
   data: { day: string; grossCents: number; orderCount: number }[];
+  allTimeCents: number;
 }) {
-  const max = Math.max(1, ...data.map((d) => d.grossCents));
-  const total = data.reduce((acc, d) => acc + d.grossCents, 0);
+  const months = useMemo(() => {
+    const seen = new Set<string>();
+    for (const d of data) seen.add(d.day.slice(0, 7));
+    return Array.from(seen).sort();
+  }, [data]);
+
+  const [selected, setSelected] = useState<string>("");
+
+  useEffect(() => {
+    if (months.length > 0 && !months.includes(selected)) {
+      setSelected(months[months.length - 1] ?? "");
+    }
+  }, [months, selected]);
+
+  const filtered = useMemo(
+    () =>
+      selected === "all"
+        ? data
+        : data.filter((d) => d.day.startsWith(selected)),
+    [data, selected],
+  );
+
+  const max = Math.max(1, ...filtered.map((d) => d.grossCents));
+  const periodTotal = filtered.reduce((acc, d) => acc + d.grossCents, 0);
+
+  const step = Math.max(1, Math.floor(filtered.length / 5));
+
   return (
     <div>
-      <p className="mb-3 text-xs text-neutral-400">
-        Total:{" "}
-        <span className="font-semibold text-neutral-700">{moneyBR(total)}</span>
-      </p>
-      <div className="flex items-end gap-0.5" style={{ height: 120 }}>
-        {data.map((d) => {
-          const h = Math.max(4, Math.round((d.grossCents / max) * 100));
-          return (
-            <div
-              key={d.day}
-              className="group relative flex flex-1 flex-col items-center justify-end"
-              style={{ height: "100%" }}
+      {/* Totals row */}
+      <div className="mb-3 flex items-center justify-between text-xs">
+        <span className="text-neutral-400">
+          Total geral:{" "}
+          <span className="font-semibold text-neutral-700">
+            {moneyBR(allTimeCents)}
+          </span>
+        </span>
+        <span className="text-neutral-400">
+          Período:{" "}
+          <span className="font-semibold text-neutral-700">
+            {moneyBR(periodTotal)}
+          </span>
+        </span>
+      </div>
+
+      {/* Month tabs */}
+      {months.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1">
+          <button
+            type="button"
+            onClick={() => setSelected("all")}
+            className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+              selected === "all"
+                ? "bg-black text-white"
+                : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+            }`}
+          >
+            Tudo
+          </button>
+          {months.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setSelected(m)}
+              className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
+                selected === m
+                  ? "bg-black text-white"
+                  : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+              }`}
             >
-              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded bg-neutral-900 px-2 py-1 text-[10px] text-white group-hover:block">
-                {moneyBR(d.grossCents)}
-                <br />
-                {d.orderCount} pedido{d.orderCount !== 1 ? "s" : ""}
-              </div>
-              <div
-                className="w-full rounded-t-sm bg-black transition-all"
-                style={{ height: `${h}%` }}
-              />
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-1 flex gap-0.5">
-        {data.map((d, i) => (
-          <div key={d.day} className="flex-1 text-center">
-            {(i % 7 === 0 || i === data.length - 1) && (
-              <span className="text-[9px] text-neutral-400">{d.day.slice(5)}</span>
-            )}
+              {monthLabel(m)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Bar chart */}
+      {filtered.length === 0 ? (
+        <p className="text-xs text-neutral-400">Sem dados neste período.</p>
+      ) : (
+        <>
+          <div className="flex items-end gap-0.5" style={{ height: 112 }}>
+            {filtered.map((d) => {
+              const h = Math.max(4, Math.round((d.grossCents / max) * 100));
+              return (
+                <div
+                  key={d.day}
+                  className="group relative flex flex-1 flex-col items-center justify-end"
+                  style={{ height: "100%" }}
+                >
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded bg-neutral-900 px-2 py-1 text-[10px] text-white group-hover:block">
+                    {d.day.slice(8)}/{d.day.slice(5, 7)}
+                    <br />
+                    {moneyBR(d.grossCents)}
+                    <br />
+                    {d.orderCount} pedido{d.orderCount !== 1 ? "s" : ""}
+                  </div>
+                  <div
+                    className="w-full rounded-t-sm bg-black transition-all duration-150"
+                    style={{ height: `${h}%` }}
+                  />
+                </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+          <div className="mt-1 flex gap-0.5">
+            {filtered.map((d, i) => (
+              <div key={d.day} className="flex-1 text-center">
+                {(i === 0 || i === filtered.length - 1 || i % step === 0) && (
+                  <span className="text-[9px] text-neutral-400">
+                    {d.day.slice(8)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
