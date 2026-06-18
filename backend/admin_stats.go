@@ -212,7 +212,7 @@ func queryRevenueByDay(ctx context.Context, db *sql.DB) ([]adminDailyRevenue, er
 		FROM orders
 		WHERE status IN ('paid', 'shipped')
 		GROUP BY day
-		ORDER BY day ASC`)
+		ORDER BY day ASC`))
 	if err != nil {
 		return nil, err
 	}
