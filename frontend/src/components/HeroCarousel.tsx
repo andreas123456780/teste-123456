@@ -73,6 +73,36 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
     return index < minSafe || index >= maxSafe;
   })();
 
+  // How many slides fit across the viewport, matched to the responsive
+  // basis classes on each slide (`basis-full sm:basis-1/2 md:basis-1/3`).
+  // We need this to convert one logical step into the right translate
+  // percent: each step should scroll by 1/perView of the viewport, so
+  // `percentPerSlide = 100 / perView`. A value that doesn't match the
+  // layout causes the visible window to land partway through slides,
+  // which on mobile showed only the middle of every photo.
+  const [perView, setPerView] = useState<1 | 2 | 3>(() => {
+    if (typeof window === "undefined") return 3;
+    if (window.matchMedia("(min-width: 768px)").matches) return 3;
+    if (window.matchMedia("(min-width: 640px)").matches) return 2;
+    return 1;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const md = window.matchMedia("(min-width: 768px)");
+    const sm = window.matchMedia("(min-width: 640px)");
+    const update = () => {
+      if (md.matches) setPerView(3);
+      else if (sm.matches) setPerView(2);
+      else setPerView(1);
+    };
+    md.addEventListener("change", update);
+    sm.addEventListener("change", update);
+    return () => {
+      md.removeEventListener("change", update);
+      sm.removeEventListener("change", update);
+    };
+  }, []);
+
   const onTrackTransitionEnd = (e: React.TransitionEvent<HTMLDivElement>) => {
     // transitionend fires for every animatable property. We only rebase
     // after the transform animation settles — the one the user actually
@@ -93,11 +123,10 @@ export function HeroCarousel({ slides = DEFAULT_SLIDES, autoIntervalMs = AUTO_MS
     });
   };
 
-  // Each slide occupies 1/3 of the flex parent on desktop, so translating
-  // the track by 33.33% per logical step moves exactly one slide. On
-  // narrower breakpoints slides are 1/2 or full-width, so one step reveals
-  // a partial slide — intentional, it hints there's more to come.
-  const percentPerSlide = 100 / 3;
+  // Each slide occupies 1/perView of the flex parent at the current
+  // breakpoint, so translating the track by 100/perView per logical step
+  // moves exactly one slide regardless of viewport width.
+  const percentPerSlide = 100 / perView;
   const translatePct = -index * percentPerSlide;
 
   const onPointerDown = (e: React.PointerEvent) => {
